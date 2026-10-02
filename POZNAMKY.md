@@ -9,7 +9,7 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Vizuální styl "A · Stavba" - HOTOVO.**
 **Test na iPhonu, 3 části (klávesnice, barvy, přestavba Nastavení) - HOTOVO.**
 **Etapa 2, ČÁST A (GitHub + sestavení) - HOTOVO, první build na GitHubu OVĚŘEN (13m59s, všechny kroky zelené, `.ipa` 14,7 MB).**
-**Etapa 2, ČÁST B (záznam míst) - HOTOVO (kód), čeká na ověření druhým buildem a test v terénu.**
+**Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Zbývá už jen test v terénu na skutečném zařízení.**
 
 - Etapa 3 (přejezdy, mapa, km) - nezačato.
 - Etapa 4 (export, záloha) - nezačato.
@@ -28,6 +28,60 @@ nedá odzkoušet z WSL. Co jsem udělal pro co největší jistotu:
   spolehlivě, přesnost GPS v průběžném režimu. Na tohle slouží ladicí
   deník (ČÁST B bod 9) - exportuj ho mi, kdybys narazil na něco
   podezřelého.
+
+## Test v terénu - co teď udělat a na co se dívat
+
+Build je ověřený (viz Stav výše), appka je ke stažení jako nový `.ipa`
+(návod na instalaci/aktualizaci přes Sideloadly níž v sekci "Jak appku
+nainstalovat" - stejný postup, jen stáhni novou verzi z posledního
+běhu Actions, run ID 37043119315).
+
+### Co nastavit RÁNO (jednou, pak už to běží samo)
+
+1. Otevři appku → **Nastavení → Poloha a trasy**.
+2. Zapni **"Zaznamenávat trasy"**. Appka se zeptá na oprávnění k
+   poloze - potvrď nejdřív "Při používání", pak až se appka zeptá
+   znovu (nebo přes vyskakující červené upozornění v tomhle
+   nastavení), potvrď i **"Vždy"** - bez něj appka nebude sledovat
+   polohu, když ji zavřeš.
+3. Zvol **režim**: pro běžný pracovní den dej **"Úsporný"** (šetří
+   baterii, používá CLVisit/geofencing) - "Průběžný" je spíš na
+   testování přesnosti, víc žere baterii.
+4. Nastav **dny a časové okno** (např. Po-Pá, 6:00-19:00) - mimo tohle
+   okno appka nic nezaznamená.
+5. V **Nastavení → Aplikace** zapni **"Ladicí deník"** (pro první
+   týdny testování - pak se může vypnout).
+6. Přidej aspoň pár **Uložených míst** (Nastavení → Poloha a trasy →
+   Uložená místa) - hlavně "Domov" a stavby, kde se dnes bude
+   pracovat, přes "Zde jsem teď" nebo výběrem na mapě.
+7. Appku pak klidně zavři (nebo i vypni telefon ze zámku) - sledování
+   běží na pozadí.
+
+### Co kontrolovat VEČER v Ladicím deníku
+
+Nastavení → Aplikace → Zobrazit ladicí deník:
+
+- **Objevily se vůbec nějaké záznamy?** Pokud je deník prázdný celý
+  den, sledování na pozadí nefunguje (nejpravděpodobnější příčina:
+  chybí oprávnění "Vždy", nebo appku mezitím někdo z telefonu
+  odstranil/restartoval telefon bez dalšího spuštění appky).
+- **Jsou tam příjezdy/odjezdy (CLVisit) k uloženým místům**, odpovídá
+  jejich čas realitě (kdy jsi skutečně přijel/odjel)?
+- **Odpovídá úroveň baterie u jednotlivých záznamů realitě** (orientačně,
+  jestli sledování nezabíjí baterii nepřiměřeně rychle)?
+- Jde appka po probuzení z pozadí (po "app wake" záznamu) normálně
+  otevřít a reaguje?
+- Pak v **Detailu dne** (ten konkrétní den) zkontroluj sekci
+  **"PRŮBĚH DNE"** - jsou tam skutečné pobyty se správnými časy? Pokud
+  ano, zkus tlačítko **"NAVRHNOUT Z POBYTŮ"** a porovnej navržený čas
+  se skutečně odpracovanými hodinami.
+- Kdyby něco vypadalo podezřele (chybí záznamy, špatné časy, appka
+  padá), použij v Ladicím deníku **export** (ikona/tlačítko export) a
+  pošli mi ten exportovaný soubor - z toho poznám, co se dělo.
+
+Klidně to zkoušej i víc dní za sebou, než budeš appce věřit natolik,
+že deník vypneš a začneš appce důvěřovat jako hlavnímu nástroji pro
+evidenci docházky.
 
 ## ČÁST B - záznam míst (datový model a rozhodnutí)
 
@@ -114,7 +168,7 @@ efekt na začátku `app/_layout.tsx`. Samotná logika (`handleVisitEvent`,
   na aktuální polohu (= "zde jsem teď"), klepnutím kamkoliv jinam se
   značka přesune (= "výběr na mapě"). Přepínač "Domov" vylučuje místo
   z návrhu hodin.
-- **Detail dne - PRŮBĖH DNE** - skutečné pobyty, žlutý číslovaný
+- **Detail dne - PRŮBĚH DNE** - skutečné pobyty, žlutý číslovaný
   čtvereček, čas od-do, délka. Klepnutím na pobyt -> modal s úpravou
   času (HH:MM) a mazáním. "Neznámé místo" -> "Uložit jako nové místo"
   (otevře `place-edit` s předvyplněnými souřadnicemi, po uložení se
