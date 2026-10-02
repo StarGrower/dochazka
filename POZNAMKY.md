@@ -211,8 +211,10 @@ není nic citlivého (jen kód appky pro osobní použití).
 
 ### GitHub Actions workflow (`.github/workflows/build-ios.yml`)
 
-Spouští se automaticky při pushi do `main`, nebo ručně (záložka
-Actions → "Build unsigned iOS .ipa" → "Run workflow"). Kroky: `expo
+Spouští se automaticky při pushi do `main` (kromě pushů, které mění
+jen `.md` soubory - `paths-ignore`, aby úprava poznámek nespotřebovala
+build minuty zadarmo), nebo ručně (záložka Actions → "Build unsigned
+iOS .ipa" → "Run workflow"). Kroky: `expo
 prebuild --platform ios` → `pod install` → `xcodebuild` v Release
 konfiguraci s `CODE_SIGNING_ALLOWED=NO` (JS bundle se zabalí dovnitř
 automaticky, díky Release konfiguraci - appka pak běží bez počítače) →
