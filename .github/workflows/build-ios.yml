@@ -1,0 +1,92 @@
+# Sestaví NEPODEPSANÉ iOS .ipa (Release, JS bundle zabalený uvnitř -
+# appka běží bez počítače/Metra) pro instalaci přes Sideloadly
+# s bezplatným Apple ID. Žádné podepisování tady neprobíhá
+# (CODE_SIGNING_ALLOWED=NO) - to dělá až Sideloadly lokálně na
+# uživatelově Macu/PC s jeho vlastním free Apple ID.
+#
+# NETRIVIÁLNÍ ROZHODNUTÍ - proč "Dochzka", ne "Dochazka": `expo
+# prebuild` odvozuje název Xcode projektu/schématu z app.json "name"
+# ("Docházka") a při sanitizaci na ASCII prostě vypustí diakritiku
+# včetně písmene za ní, místo aby ji přepsalo na "a" - výsledek je
+# "Dochzka". Ověřeno lokálním prebuildem. Na ZOBRAZOVANÝ název appky
+# (CFBundleDisplayName = "Docházka", co uvidíš pod ikonkou) to vliv
+# nemá, je to jen vnitřní technické jméno projektu/schématu/workspace.
+name: Build unsigned iOS .ipa
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ hashFiles('package-lock.json') }}
+
+      - name: Install JS dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Expo prebuild (iOS)
+        run: npx expo prebuild --platform ios
+
+      - name: Cache CocoaPods
+        id: cache-pods
+        uses: actions/cache@v4
+        with:
+          path: ios/Pods
+          key: pods-${{ hashFiles('ios/Podfile') }}
+
+      - name: Install CocoaPods
+        working-directory: ios
+        run: pod install
+
+      - name: Build (Release, bez podpisu)
+        working-directory: ios
+        run: |
+          xcodebuild \
+            -workspace Dochzka.xcworkspace \
+            -scheme Dochzka \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            build
+
+      - name: Zabalit jako nepodepsané .ipa
+        working-directory: ios
+        run: |
+          set -eu
+          APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app')"
+          mkdir -p Payload
+          cp -r "$APP_PATH" Payload/
+          zip -r -q ../Dochazka-unsigned.ipa Payload
+
+      - name: Nahrát .ipa jako artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dochazka-unsigned-ipa
+          path: Dochazka-unsigned.ipa
+          retention-days: 14
