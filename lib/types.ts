@@ -38,6 +38,64 @@ export interface MonthDaySummary {
   days: number;
 }
 
+// --- ČÁST B (etapa 2) - uložená místa, pobyty, ladicí deník ---
+
+export interface Place {
+  id: number;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radiusM: number;
+  orderLabel: string; // zakázka/odběratel - zatím jen text, viz PŘÍPRAVA NA FAKTURACI
+  isHome: boolean; // vyloučeno z "NAVRHNOUT Z POBYTŮ" (zadání "bez domova")
+  isDeleted: boolean;
+}
+
+// "clvisit"/"geofence" = úsporný režim (viz modules/visit-monitor),
+// "continuous" = průběžný režim (odvozeno z bodů), "manual" = ručně
+// upravené/vytvořené v Detailu dne.
+export type VisitSource = 'clvisit' | 'geofence' | 'continuous' | 'manual';
+
+export interface Visit {
+  id: number;
+  placeId: number | null; // null = neznámé místo
+  unknownLatitude: number | null;
+  unknownLongitude: number | null;
+  startAt: string; // ISO datetime
+  endAt: string | null; // null = pobyt ještě neskončil (probíhá)
+  source: VisitSource;
+  isDeleted: boolean;
+}
+
+export interface VisitWithPlace extends Visit {
+  placeName: string | null;
+  placeRadiusM: number | null;
+  placeIsHome: boolean;
+}
+
+export type DebugEventType =
+  | 'arrival'
+  | 'departure'
+  | 'geofence_enter'
+  | 'geofence_exit'
+  | 'point'
+  | 'app_wake'
+  | 'significant_change'
+  | 'permission'
+  | 'error';
+
+export interface DebugLogEntry {
+  id: number;
+  timestamp: string; // ISO
+  eventType: DebugEventType;
+  detail: string;
+  batteryLevel: number | null; // 0-1
+  latitude: number | null;
+  longitude: number | null;
+}
+
+export type LocationTrackingMode = 'economical' | 'continuous';
+
 // Aplikační nastavení (klíč-hodnota v SQLite, viz lib/db.ts ->
 // getSettings/updateSettings). Jeden plochý objekt - sekce v UI
 // (Nastavení -> Zápisy/Aplikace/...) jsou jen vizuální seskupení,
@@ -60,6 +118,16 @@ export interface AppSettings {
   weekStartsMonday: boolean;
   hapticsEnabled: boolean;
   fontScale: FontScale;
+  debugLogEnabled: boolean;
+  // --- Poloha a trasy (etapa 2, ČÁST B) ---
+  locationTrackingEnabled: boolean;
+  locationMode: LocationTrackingMode;
+  continuousIntervalMinutes: number; // 5-10
+  // Dny v týdnu, kdy se zaznamenává - 0=neděle..6=sobota (JS Date.getDay()).
+  trackingDays: number[];
+  trackingStartMinutes: number; // minut od půlnoci, např. 6:00 = 360
+  trackingEndMinutes: number; // např. 19:00 = 1140
+  minStayMinutes: number; // krátké pobyty pod tohle se ignorují
   // --- interní (ne vlastní obrazovka v Nastavení) ---
   // Poslední vlastní (hex) barvy kategorií - viz components/ColorPicker.tsx,
   // "Naposledy použité".
@@ -78,5 +146,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   weekStartsMonday: true,
   hapticsEnabled: true,
   fontScale: 'normal',
+  debugLogEnabled: true,
+  locationTrackingEnabled: false,
+  locationMode: 'economical',
+  continuousIntervalMinutes: 7,
+  trackingDays: [1, 2, 3, 4, 5], // Po-Pá
+  trackingStartMinutes: 360, // 6:00
+  trackingEndMinutes: 1140, // 19:00
+  minStayMinutes: 10,
   recentCustomColors: [],
 };

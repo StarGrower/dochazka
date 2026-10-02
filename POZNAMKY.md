@@ -7,11 +7,218 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 
 **Etapa 1 (kalendář, ruční zápis hodin, kategorie/stroje se sazbami) - HOTOVO.**
 **Vizuální styl "A · Stavba" - HOTOVO.**
-**Test na iPhonu, 3 části (klávesnice, barvy, přestavba Nastavení) - HOTOVO, čeká na otestování.**
+**Test na iPhonu, 3 části (klávesnice, barvy, přestavba Nastavení) - HOTOVO.**
+**Etapa 2, ČÁST A (GitHub + sestavení) - HOTOVO, první build na GitHubu OVĚŘEN (13m59s, všechny kroky zelené, `.ipa` 14,7 MB).**
+**Etapa 2, ČÁST B (záznam míst) - HOTOVO (kód), čeká na ověření druhým buildem a test v terénu.**
 
-- Etapa 2 (uložená místa) - nezačato.
-- Etapa 3 (přejezdy, mapa, km, záznam polohy na pozadí) - nezačato.
+- Etapa 3 (přejezdy, mapa, km) - nezačato.
 - Etapa 4 (export, záloha) - nezačato.
+
+## DŮLEŽITÉ - co jsem NEMOHL ověřit sám (ČÁST B)
+
+Nemám Mac ani iPhone - CLVisit/geofencing/background sledování se
+nedá odzkoušet z WSL. Co jsem udělal pro co největší jistotu:
+- TypeScript/JS strana: typecheck + lint bez chyby, JS bundle se
+  úspěšně sestavil (Metro).
+- Swift strana nativního modulu: NEMŮŽU lokálně zkompilovat (žádný
+  Xcode) - jediný skutečný test je `xcodebuild` na GitHub Actions
+  (macOS runner), což je přesně to, co se teď pustilo (viz níž).
+- Co zbývá a může ověřit jen SKUTEČNÉ zařízení v terénu: jestli CLVisit
+  opravdu vzbudí appku po zavření, jestli geofence enter/exit chodí
+  spolehlivě, přesnost GPS v průběžném režimu. Na tohle slouží ladicí
+  deník (ČÁST B bod 9) - exportuj ho mi, kdybys narazil na něco
+  podezřelého.
+
+## ČÁST B - záznam míst (datový model a rozhodnutí)
+
+### Nativní modul `modules/visit-monitor` (Expo Modules API, Swift)
+
+`expo-location` nemá CLVisit ani "significant location changes" jako
+samostatnou věc - proto malý lokální modul (`npx create-expo-module
+--local`), jen 2 funkce párů (start/stop) + `drainPendingEvents`.
+
+NETRIVIÁLNÍ ROZHODNUTÍ - "store-and-forward" fronta přes UserDefaults
+(`ios/VisitMonitorModule.swift`): když iOS vzbudí appku na pozadí kvůli
+CLVisit, JS bridge běží chvilku, než se stihnou zaregistrovat listenery
+(`app/_layout.tsx` -> `initLocationTracking()`). Aby se v tom okně
+nic neztratilo, KAŽDÁ událost se nejdřív uloží do UserDefaults a
+TEPRVE POTOM zkusí poslat živě. JS si při startu zavolá
+`drainPendingEvents()` a frontu vyprázdní - i to, co `sendEvent`
+nestihl nikam doručit.
+
+NETRIVIÁLNÍ ROZHODNUTÍ - žádné `nil`/`Any?` v datech pro UserDefaults:
+plist serializace (na čem UserDefaults stojí) neumí Swift `nil` -
+CLVisit reportuje `Date.distantPast`/`distantFuture` pro "neznámé
+datum", převádí se na prázdný string `""`, ne na `nil` (viz
+`modules/visit-monitor/src/VisitMonitor.types.ts`).
+
+`OnCreate` (spustí se při KAŽDÉM startu JS runtime, i na pozadí) znovu
+zapne monitoring podle vlajky v UserDefaults - `CLLocationManager`
+samotný si mezi restarty procesu pamatuje, že má sledovat, ale
+`delegate` (kam se posílají výsledky) je jen v paměti a musí se
+nastavit znovu po každém startu.
+
+### Datový model (`lib/db.ts`, `lib/types.ts`)
+
+- `places` - uložená místa (název, souřadnice, poloměr 50-500m,
+  `order_label` pro budoucí fakturaci, `is_home` - vyloučeno z
+  "NAVRHNOUT Z POBYTŮ").
+- `visits` - pobyty (místo NEBO `unknown_lat/lon` pro "Neznámé místo",
+  začátek, konec - `NULL` = probíhá, `source`: clvisit/geofence/
+  continuous/manual).
+- `location_points` - body z průběžného režimu (prořezáváno po 14 dnech).
+- `debug_log` - ladicí deník (prořezáváno po 14 dnech), zapíná/vypíná
+  se centrálně v `addDebugLogEntry()` podle `settings.debugLogEnabled`.
+- Měkké smazání u `places` (stejný důvod jako `work_categories` -
+  staré pobyty by jinak ztratily jméno místa).
+
+### Orchestrace (`lib/locationTracking.ts` + `lib/backgroundTasks.ts`)
+
+Rozdělení do dvou souborů je záměrné: `expo-task-manager`
+(geofencing, průběžné updaty) vyžaduje, aby `TaskManager.defineTask`
+běžel v GLOBÁLNÍM scope modulu (ne v komponentě) - `backgroundTasks.ts`
+proto obsahuje JEN tyhle definice a hned se importuje pro vedlejší
+efekt na začátku `app/_layout.tsx`. Samotná logika (`handleVisitEvent`,
+`handleGeofenceEvent`, `processContinuousLocationPoint`...) je v
+`locationTracking.ts`, odkud ji oba volají.
+
+- **Úsporný režim**: `VisitMonitor.startVisitMonitoring()` +
+  `startSignificantLocationMonitoring()` + geofencing na nejbližších
+  až 18 uložených místech (`refreshGeofences()`, limit iOS je 20).
+  Significant location change přepočítá "nejbližších 18" znovu -
+  zadání "obnovuj výběr při významné změně polohy".
+- **Průběžný režim**: `Location.startLocationUpdatesAsync` s nízkou
+  přesností a intervalem z Nastavení (5-10 min), z každého bodu se
+  přímo odvodí pobyt (jsem/nejsem v okruhu nějakého místa) - bez
+  CLVisitu, jak zadání chtělo.
+- **Krátké pobyty** (< `settings.minStayMinutes`, výchozí 10 min) se
+  po zavření hned měkce smažou (`closeVisitAndMaybeDiscard`) - stejná
+  funkce na všech 3 cestách (CLVisit/geofence/continuous), ať se
+  pravidlo neřeší trojmo.
+- **Časové okno** (`isWithinTrackingWindow`) se neřeší vypínáním a
+  zapínáním nativního sledování (zbytečně složité), ale filtrováním
+  PŘI ZPRACOVÁNÍ události - sledování běží pořád, mimo okno se jen
+  nic neuloží (ale do ladicího deníku ano, pro kontrolu).
+
+### UI
+
+- **Nastavení -> Poloha a trasy** (`app/settings/poloha.tsx`) - hlavní
+  přepínač vyžádá nejdřív "Při používání", pak "Vždy" (`ensureLocation
+  Permissions`); když "Vždy" chybí, appka to sledování i tak zapne,
+  ale ukáže trvalé červené upozornění (appka na pozadí nic nezaznamená
+  bez něj). Dny v týdnu, časové okno (HH:MM text), minimální délka
+  pobytu, odkaz na Uložená místa - všechno skutečně funkční.
+- **Uložená místa** (`app/settings/places.tsx` + `place-edit.tsx`) -
+  JEDNA obrazovka pro oba vstupy ze zadání ("Zde jsem teď" i "výběr na
+  mapě"): mapa (`expo-maps` -> `AppleMaps.View`) se otevře vycentrovaná
+  na aktuální polohu (= "zde jsem teď"), klepnutím kamkoliv jinam se
+  značka přesune (= "výběr na mapě"). Přepínač "Domov" vylučuje místo
+  z návrhu hodin.
+- **Detail dne - PRŮBĖH DNE** - skutečné pobyty, žlutý číslovaný
+  čtvereček, čas od-do, délka. Klepnutím na pobyt -> modal s úpravou
+  času (HH:MM) a mazáním. "Neznámé místo" -> "Uložit jako nové místo"
+  (otevře `place-edit` s předvyplněnými souřadnicemi, po uložení se
+  pobyt automaticky připojí). Mezi pobyty "Přejezd" (bez km, to je
+  etapa 3).
+- **NAVRHNOUT Z POBYTŮ** - sečte pobyty na nepracovních... pardon,
+  PRACOVNÍCH místech (bez domova) za ten den, odečte přestávku a
+  zaokrouhlí podle Nastavení -> Zápisy, a otevře stejný picker jako
+  "+ Přidat stroj nebo práci" s předvyplněným množstvím - NEULOŽÍ SE
+  nic, dokud nevybereš kategorii (zadání "návrh nic neuloží, dokud ho
+  nepotvrdím").
+- **Ladicí deník** (`app/settings/debug-log.tsx`, zapnutí v Nastavení
+  -> Aplikace) - časová řada událostí + stav baterie, export přes
+  `expo-sharing` do textového souboru (pro poslání).
+
+### Oprávnění (`app.json`)
+
+`NSLocationWhenInUseUsageDescription` +
+`NSLocationAlwaysAndWhenInUseUsageDescription` (český text, vysvětluje
+proč) + `UIBackgroundModes: location` - všechno přes `expo-location`
+plugin config, ne ručně v Info.plist. `expo-task-manager` nemá vlastní
+config plugin (nic k nastavení), proto v `app.json` není.
+
+## Repozitář a sestavení (Etapa 2, ČÁST A)
+
+- GitHub: **https://github.com/StarGrower/dochazka** (veřejný - viz
+  níž proč, přihlášen jako `StarGrower` přes `gh auth login`).
+- Větev `main`, `gh` CLI je nainstalované lokálně v
+  `~/.local/bin/gh` (bez root práv, apt chtěl sudo heslo).
+- Bundle ID: `cz.kalensky.dochazka` (potvrzeno).
+
+### Proč veřejný repozitář
+
+GitHub Actions je u veřejných repozitářů ÚPLNĚ zdarma, bez limitu na
+minuty, i na macOS runneru. U soukromého by GitHub Free dával 2000
+minut/měsíc zdarma, ale macOS runner je účtuje 10× - reálně tedy
+~200 minut měsíčně, což je podle délky sestavení (10-25 min) zhruba
+8-20 sestavení/měsíc zdarma. Rozhodli jsme se pro veřejný - v repozitáři
+není nic citlivého (jen kód appky pro osobní použití).
+
+### GitHub Actions workflow (`.github/workflows/build-ios.yml`)
+
+Spouští se automaticky při pushi do `main`, nebo ručně (záložka
+Actions → "Build unsigned iOS .ipa" → "Run workflow"). Kroky: `expo
+prebuild --platform ios` → `pod install` → `xcodebuild` v Release
+konfiguraci s `CODE_SIGNING_ALLOWED=NO` (JS bundle se zabalí dovnitř
+automaticky, díky Release konfiguraci - appka pak běží bez počítače) →
+zabalení `.app` do `Payload/` → `.ipa` → nahráno jako artifact
+(`Dochazka-unsigned-ipa`, 14 dní). Cache pro `node_modules`
+(klíč podle `package-lock.json`) a `ios/Pods` (klíč podle
+vygenerovaného `ios/Podfile`).
+
+NETRIVIÁLNÍ ROZHODNUTÍ - proč se v workflow objevuje "Dochzka", ne
+"Dochazka": `expo prebuild` odvozuje název Xcode projektu/schématu
+z `app.json` "name" ("Docházka") a při převodu na ASCII diakritiku i
+písmeno za ní prostě VYPUSTÍ, místo aby ji přepsalo na "a" - vyšlo
+"Dochzka" (ověřeno lokálním prebuildem). Na zobrazovaný název appky
+pod ikonkou (`CFBundleDisplayName`) to vliv nemá, zůstává "Docházka" -
+jde jen o vnitřní technické jméno projektu/schématu/workspace, které
+`xcodebuild` potřebuje přesně.
+
+### Jak appku nainstalovat (Sideloadly)
+
+1. Na GitHubu → záložka **Actions** → poslední úspěšný běh "Build
+   unsigned iOS .ipa" → dole **Artifacts** → stáhni
+   `Dochazka-unsigned-ipa.zip` → rozbal → uvnitř je
+   `Dochazka-unsigned.ipa`.
+2. Stáhni a nainstaluj [Sideloadly](https://sideloadly.io/) (Windows).
+3. Připoj iPhone k počítači kabelem, na iPhonu potvrď "Důvěřovat
+   tomuto počítači".
+4. V Sideloadly: vyber stažené `.ipa`, zadej svoje Apple ID.
+   - **Pokud máš na Apple ID dvoufaktorové ověření** (asi ano) - NEZADÁVEJ
+     normální heslo, ale vytvoř si **heslo pro aplikaci** na
+     https://appleid.apple.com → Zabezpečení → Hesla pro aplikace, a
+     zadej tohle vygenerované heslo do Sideloadly.
+   - Sideloadly si přes tvoje Apple ID vyžádá bezplatný vývojářský
+     certifikát (žádné roční předplatné) a appku jím podepíše.
+5. Po instalaci na iPhonu: **Nastavení → Obecné → VPN a správa
+   zařízení** → najdi profil se svým Apple ID → **Důvěřovat**.
+6. Při prvním spuštění appka odmítne jít otevřít, dokud nezapneš
+   **Režim pro vývojáře**: Nastavení → Soukromí a zabezpečení →
+   Režim pro vývojáře → zapnout → telefon se restartuje → při dalším
+   odemčení potvrdit zapnutí.
+7. Teď appka běží normálně, bez počítače a bez Wi-Fi/tunelu.
+
+### Po 7 dnech - znovu podepsat BEZE ztráty dat
+
+Certifikát z bezplatného Apple ID platí jen 7 dní - appka pak
+přestane jít otevřít ("Nelze ověřit appku"). Řešení je rychlé:
+
+1. Spusť Sideloadly znovu, vyber **ten samý** `.ipa` soubor (není
+   potřeba stahovat nový, pokud jsi appku mezitím neaktualizoval) a
+   stejné Apple ID.
+2. Nainstaluje se znovu (přepíše se) - **data v appce (SQLite)
+   zůstanou zachovaná**, protože se nic nemaže, jen se appka přepíše
+   novým podpisem se stejným Bundle ID.
+3. **Důležité pravidlo: appku mezi tím NIKDY nemaž z telefonu** (ani
+   gestem, ani přes Nastavení) - smazání appky smaže i její data.
+   Jen čekej na "Unable to Verify App" a znovu ji přes Sideloadly
+   přeinstaluj.
+
+Když budeš chtít NOVOU verzi appky (po další etapě vývoje), stáhni
+nový `.ipa` z GitHubu a sideloaduj ten - Bundle ID zůstává stejné,
+data se zachovají i při přechodu na novou verzi.
 
 ## Test na iPhonu - 3 části (oprava klávesnice, barvy, přestavba Nastavení)
 
@@ -125,7 +332,7 @@ vady:
    celý modal se vykresloval s nulovou velikostí (neviditelný,
    nekliknutelný), i když se stav (`visible`) správně měnil.
 2. I po opravě týhle konkrétní vady by zůstal druhý problém:
-   "VLASTNÍ ODSTÍN" (ČÁST 2) se otevírá VNOŘENĖ uvnitř karty editace
+   "VLASTNÍ ODSTÍN" (ČÁST 2) se otevírá VNOŘENĚ uvnitř karty editace
    kategorie - vlastní `position: absolute` se počítá jen vůči
    NEJBLIŽŠÍMU rodiči, takže vnitřní modal by se omezil na rozměr
    vnější karty, ne na celou obrazovku.
@@ -196,7 +403,7 @@ nebo práci"). Výchozí stav po otevření dne je čistý výpis.
 
 ### Co ze zadání designu ZATÍM NENÍ (patří do pozdějších etap)
 
-- **Mapa + "PRŮBĖH DNE"** (zastávky, přejezdy) v Detailu dne - potřebuje
+- **Mapa + "PRŮBĚH DNE"** (zastávky, přejezdy) v Detailu dne - potřebuje
   záznam polohy (etapa 3). Místo toho je tam jen krátká poznámka, že
   to přibude. Jakmile se etapa 3 postaví, bude se řídit stejnou
   specifikací barev (žlutá trasa, žluté čtverečky zastávek).

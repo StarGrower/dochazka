@@ -36,8 +36,13 @@ import type {
   AppSettings,
   CategoryKind,
   DayWorkRecordWithCategory,
+  DebugEventType,
+  DebugLogEntry,
   MonthDaySummary,
+  Place,
   RateType,
+  VisitSource,
+  VisitWithPlace,
   WorkCategory,
 } from './types';
 import { DEFAULT_SETTINGS } from './types';
@@ -104,6 +109,48 @@ export async function initDb(): Promise<void> {
       key TEXT PRIMARY KEY NOT NULL,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS places (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      latitude REAL NOT NULL,
+      longitude REAL NOT NULL,
+      radius_m REAL NOT NULL DEFAULT 150,
+      order_label TEXT NOT NULL DEFAULT '',
+      is_home INTEGER NOT NULL DEFAULT 0,
+      is_deleted INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS visits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      place_id INTEGER REFERENCES places (id),
+      unknown_latitude REAL,
+      unknown_longitude REAL,
+      start_at TEXT NOT NULL,
+      end_at TEXT,
+      source TEXT NOT NULL CHECK (source IN ('clvisit', 'geofence', 'continuous', 'manual')),
+      is_deleted INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_visits_start_at ON visits (start_at);
+
+    CREATE TABLE IF NOT EXISTS location_points (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL,
+      latitude REAL NOT NULL,
+      longitude REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_location_points_timestamp ON location_points (timestamp);
+
+    CREATE TABLE IF NOT EXISTS debug_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      battery_level REAL,
+      latitude REAL,
+      longitude REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_debug_log_timestamp ON debug_log (timestamp);
   `);
 
   await migrateAddCategoryColor(db);
@@ -375,6 +422,14 @@ const SETTINGS_KEYS: { [K in keyof AppSettings]: string } = {
   weekStartsMonday: 'week_starts_monday',
   hapticsEnabled: 'haptics_enabled',
   fontScale: 'font_scale',
+  debugLogEnabled: 'debug_log_enabled',
+  locationTrackingEnabled: 'location_tracking_enabled',
+  locationMode: 'location_mode',
+  continuousIntervalMinutes: 'continuous_interval_minutes',
+  trackingDays: 'tracking_days',
+  trackingStartMinutes: 'tracking_start_minutes',
+  trackingEndMinutes: 'tracking_end_minutes',
+  minStayMinutes: 'min_stay_minutes',
   recentCustomColors: 'recent_custom_colors',
 };
 
@@ -431,6 +486,278 @@ export async function wipeAllData(): Promise<void> {
     DELETE FROM day_initialized;
     DELETE FROM work_categories;
     DELETE FROM settings;
+    DELETE FROM places;
+    DELETE FROM visits;
+    DELETE FROM location_points;
+    DELETE FROM debug_log;
   `);
   await seedDefaultCategories(db);
+}
+
+// --- uložená místa (etapa 2, ČÁST B) ---
+
+interface PlaceRow {
+  id: number;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_m: number;
+  order_label: string;
+  is_home: number;
+  is_deleted: number;
+}
+
+function mapPlace(row: PlaceRow): Place {
+  return {
+    id: row.id,
+    name: row.name,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    radiusM: row.radius_m,
+    orderLabel: row.order_label,
+    isHome: row.is_home === 1,
+    isDeleted: row.is_deleted === 1,
+  };
+}
+
+export async function listPlaces(includeDeleted = false): Promise<Place[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<PlaceRow>(
+    includeDeleted
+      ? 'SELECT * FROM places ORDER BY name'
+      : 'SELECT * FROM places WHERE is_deleted = 0 ORDER BY name'
+  );
+  return rows.map(mapPlace);
+}
+
+export async function createPlace(
+  name: string,
+  latitude: number,
+  longitude: number,
+  radiusM: number,
+  orderLabel: string,
+  isHome: boolean
+): Promise<number> {
+  const db = await getDb();
+  const result = await db.runAsync(
+    'INSERT INTO places (name, latitude, longitude, radius_m, order_label, is_home) VALUES (?, ?, ?, ?, ?, ?)',
+    [name, latitude, longitude, radiusM, orderLabel, isHome ? 1 : 0]
+  );
+  return result.lastInsertRowId;
+}
+
+export async function updatePlace(
+  id: number,
+  fields: { name: string; latitude: number; longitude: number; radiusM: number; orderLabel: string; isHome: boolean }
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    'UPDATE places SET name = ?, latitude = ?, longitude = ?, radius_m = ?, order_label = ?, is_home = ? WHERE id = ?',
+    [fields.name, fields.latitude, fields.longitude, fields.radiusM, fields.orderLabel, fields.isHome ? 1 : 0, id]
+  );
+}
+
+// Měkké smazání - staré pobyty na tohle místo (visits.place_id) by
+// jinak ztratily jméno, stejný důvod jako u work_categories.
+export async function deletePlace(id: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE places SET is_deleted = 1 WHERE id = ?', [id]);
+}
+
+// --- pobyty (etapa 2, ČÁST B) ---
+
+interface VisitRow {
+  id: number;
+  place_id: number | null;
+  unknown_latitude: number | null;
+  unknown_longitude: number | null;
+  start_at: string;
+  end_at: string | null;
+  source: VisitSource;
+  is_deleted: number;
+  place_name: string | null;
+  place_radius_m: number | null;
+  place_is_home: number | null;
+}
+
+function mapVisit(row: VisitRow): VisitWithPlace {
+  return {
+    id: row.id,
+    placeId: row.place_id,
+    unknownLatitude: row.unknown_latitude,
+    unknownLongitude: row.unknown_longitude,
+    startAt: row.start_at,
+    endAt: row.end_at,
+    source: row.source,
+    isDeleted: row.is_deleted === 1,
+    placeName: row.place_name,
+    placeRadiusM: row.place_radius_m,
+    placeIsHome: row.place_is_home === 1,
+  };
+}
+
+// Pobyty, co se (aspoň částečně) PŘEKRÝVAJÍ s daným dnem - ne jen ty,
+// co v ten den ZAČÍNAJÍ, ať se správně zobrazí i pobyt přes půlnoc
+// (viz PRŮBĚH DNE v Detailu dne).
+export async function getVisitsForDay(date: string): Promise<VisitWithPlace[]> {
+  const db = await getDb();
+  const dayStart = `${date}T00:00:00`;
+  const dayEnd = `${date}T23:59:59`;
+  const rows = await db.getAllAsync<VisitRow>(
+    `SELECT v.*, p.name as place_name, p.radius_m as place_radius_m, p.is_home as place_is_home
+     FROM visits v
+     LEFT JOIN places p ON p.id = v.place_id
+     WHERE v.is_deleted = 0
+       AND v.start_at <= ?
+       AND (v.end_at IS NULL OR v.end_at >= ?)
+     ORDER BY v.start_at`,
+    [dayEnd, dayStart]
+  );
+  return rows.map(mapVisit);
+}
+
+export async function createVisit(visit: {
+  placeId: number | null;
+  unknownLatitude: number | null;
+  unknownLongitude: number | null;
+  startAt: string;
+  endAt: string | null;
+  source: VisitSource;
+}): Promise<number> {
+  const db = await getDb();
+  const result = await db.runAsync(
+    `INSERT INTO visits (place_id, unknown_latitude, unknown_longitude, start_at, end_at, source)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      visit.placeId,
+      visit.unknownLatitude,
+      visit.unknownLongitude,
+      visit.startAt,
+      visit.endAt,
+      visit.source,
+    ]
+  );
+  return result.lastInsertRowId;
+}
+
+export async function updateVisitTimes(id: number, startAt: string, endAt: string | null): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE visits SET start_at = ?, end_at = ? WHERE id = ?', [startAt, endAt, id]);
+}
+
+// Nejnovější pobyt bez místa a bez konce - "probíhající" pobyt, co se
+// má doplnit, až přijde odpovídající "depart" (viz lib/locationTracking.ts).
+export async function findOpenVisit(): Promise<VisitWithPlace | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<VisitRow>(
+    `SELECT v.*, p.name as place_name, p.radius_m as place_radius_m, p.is_home as place_is_home
+     FROM visits v
+     LEFT JOIN places p ON p.id = v.place_id
+     WHERE v.is_deleted = 0 AND v.end_at IS NULL
+     ORDER BY v.start_at DESC
+     LIMIT 1`
+  );
+  return row ? mapVisit(row) : null;
+}
+
+export async function closeVisit(id: number, endAt: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE visits SET end_at = ? WHERE id = ?', [endAt, id]);
+}
+
+export async function deleteVisit(id: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE visits SET is_deleted = 1 WHERE id = ?', [id]);
+}
+
+// Spojí pobyt s nově uloženým místem (viz "Neznámé místo" -> "Uložit
+// jako nové místo" v Detailu dne) - jen tenhle jeden záznam, ne
+// hromadně, ať se neprepisují jiné "neznámé" pobyty, co s tímhle
+// místem možná nesouvisí.
+export async function attachVisitToPlace(visitId: number, placeId: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    'UPDATE visits SET place_id = ?, unknown_latitude = NULL, unknown_longitude = NULL WHERE id = ?',
+    [placeId, visitId]
+  );
+}
+
+// --- ladicí deník (etapa 2, ČÁST B bod 9) ---
+
+interface DebugLogRow {
+  id: number;
+  timestamp: string;
+  event_type: DebugEventType;
+  detail: string;
+  battery_level: number | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+function mapDebugLog(row: DebugLogRow): DebugLogEntry {
+  return {
+    id: row.id,
+    timestamp: row.timestamp,
+    eventType: row.event_type,
+    detail: row.detail,
+    batteryLevel: row.battery_level,
+    latitude: row.latitude,
+    longitude: row.longitude,
+  };
+}
+
+const DEBUG_LOG_MAX_AGE_DAYS = 14;
+
+export async function addDebugLogEntry(entry: {
+  timestamp: string;
+  eventType: DebugEventType;
+  detail: string;
+  batteryLevel: number | null;
+  latitude: number | null;
+  longitude: number | null;
+}): Promise<void> {
+  // Jedno centrální místo pro zapnuto/vypnuto (Nastavení -> Aplikace ->
+  // Ladicí deník) - volající se o to nemusí starat.
+  const settings = await getSettings();
+  if (!settings.debugLogEnabled) return;
+
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO debug_log (timestamp, event_type, detail, battery_level, latitude, longitude)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [entry.timestamp, entry.eventType, entry.detail, entry.batteryLevel, entry.latitude, entry.longitude]
+  );
+  // Prořezání starých záznamů při každém zápisu - ladicí deník běží
+  // dny/týdny v terénu, bez tohohle by neomezeně rostl.
+  const cutoff = new Date(Date.now() - DEBUG_LOG_MAX_AGE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  await db.runAsync('DELETE FROM debug_log WHERE timestamp < ?', [cutoff]);
+}
+
+export async function listDebugLog(limit = 500): Promise<DebugLogEntry[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<DebugLogRow>(
+    'SELECT * FROM debug_log ORDER BY timestamp DESC LIMIT ?',
+    [limit]
+  );
+  return rows.map(mapDebugLog);
+}
+
+export async function clearDebugLog(): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM debug_log', []);
+}
+
+// --- body polohy (etapa 2, ČÁST B bod 3 - průběžný režim) ---
+
+const LOCATION_POINTS_MAX_AGE_DAYS = 14;
+
+export async function insertLocationPoint(timestamp: string, latitude: number, longitude: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('INSERT INTO location_points (timestamp, latitude, longitude) VALUES (?, ?, ?)', [
+    timestamp,
+    latitude,
+    longitude,
+  ]);
+  const cutoff = new Date(Date.now() - LOCATION_POINTS_MAX_AGE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  await db.runAsync('DELETE FROM location_points WHERE timestamp < ?', [cutoff]);
 }

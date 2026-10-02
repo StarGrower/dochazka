@@ -102,6 +102,18 @@ export default function AplikaceSettingsScreen() {
           ]}
         />
 
+        <Text style={styles.sectionHeader}>POLOHA - LADĚNÍ</Text>
+        <ToggleRow
+          label="Ladicí deník"
+          description="Zapisuje události záznamu polohy pro testování v terénu"
+          value={settings.debugLogEnabled}
+          onValueChange={(v) => patch({ debugLogEnabled: v })}
+        />
+        <TouchableOpacity style={styles.row} onPress={() => router.push('/settings/debug-log')}>
+          <Text style={styles.label}>Zobrazit ladicí deník</Text>
+          <Text style={styles.value}>›</Text>
+        </TouchableOpacity>
+
         <Text style={styles.sectionHeader}>DATA</Text>
         <View style={styles.rowDisabled}>
           <Text style={styles.label}>Záloha a obnova dat</Text>

@@ -35,7 +35,18 @@
           "backgroundColor": "#131311"
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Docházka potřebuje vědět, kde jste, aby mohla automaticky rozpoznat příjezd na uložená místa (stavby, rybníky) a navrhnout odpracovaný čas.",
+          "locationAlwaysAndWhenInUsePermission": "Docházka potřebuje sledovat polohu i na pozadí, aby zaznamenala pobyty na stavbách, i když appku nemáte otevřenou. Bez toho nejde zapsat docházku automaticky.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": false
+        }
+      ],
+      "expo-maps",
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true

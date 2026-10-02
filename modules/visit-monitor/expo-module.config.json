@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android", "web"],
+  "apple": {
+    "modules": ["VisitMonitorModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.visitmonitor.VisitMonitorModule"]
+  }
+}

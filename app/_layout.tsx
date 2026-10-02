@@ -7,10 +7,15 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
+// Definice background tasků (geofencing, průběžný režim) - musí běžet
+// v globálním scope, co nejdřív, i při probuzení appky na pozadí (viz
+// lib/backgroundTasks.ts). Import jen pro vedlejší efekt.
+import '@/lib/backgroundTasks';
 
 import KeyboardDoneAccessory from '@/components/KeyboardDoneAccessory';
 import { colors } from '@/theme';
 import { initDb } from '@/lib/db';
+import { initLocationTracking } from '@/lib/locationTracking';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -52,6 +57,10 @@ export default function RootLayout() {
   useEffect(() => {
     initDb()
       .then(() => setDbReady(true))
+      // initLocationTracking je "best effort" - chyba v ní (např. appka
+      // běží v Expo Go, kde nativní modul neexistuje) nesmí appce
+      // zabránit nastartovat, proto samostatný .catch (ne společný s initDb).
+      .then(() => initLocationTracking().catch(() => {}))
       .catch((err) => setDbError(err instanceof Error ? err : new Error(String(err))));
   }, []);
 
@@ -86,7 +95,10 @@ export default function RootLayout() {
           <Stack.Screen name="settings/categories" />
           <Stack.Screen name="settings/zapisy" />
           <Stack.Screen name="settings/poloha" />
+          <Stack.Screen name="settings/places" />
+          <Stack.Screen name="settings/place-edit" />
           <Stack.Screen name="settings/aplikace" />
+          <Stack.Screen name="settings/debug-log" />
           <Stack.Screen name="settings/odberatele" />
         </Stack>
         {/* Globální "Hotovo" lišta nad číselnou klávesnicí (ČÁST 1 oprava) -
