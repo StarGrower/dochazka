@@ -12,7 +12,7 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Test v terénu proběhl 2.-4. 10. 2026.**
 **Oprava 2 (po terénním testu etapy 2) - HOTOVO (skupiny A-F), build OVĚŘEN (run 37210061504, 13m21s, všechny kroky zelené vč. Swift modulu, `.ipa` ~15 MB). Čeká na test v telefonu - viz "Co otestovat v telefonu (oprava 2)".**
 
-**Etapa 3 (přejezdy, trasy, km, mapa) + ikona, logo a úvodní animace - HOTOVO, viz sekce "Etapa 3" níž; čeká na build a test v terénu.**
+**Etapa 3 (přejezdy, trasy, km, mapa) + ikona, logo a úvodní animace - HOTOVO, build OVĚŘEN (run 37218589500, 15m34s, vše zelené vč. react-native-maps a react-native-svg, `.ipa` ~15 MB). Čeká na test v terénu - viz "Etapa 3 - co testovat v terénu".**
 - Etapa 4 (export, záloha) - nezačato.
 
 ## Etapa 3 - přejezdy, trasy, kilometry, mapa
@@ -76,6 +76,39 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
   "Zahodit trasu" (body `trip_id = -1` -> odhad), smazat přejezd.
 - **Nastavení -> Poloha a trasy:** Zaznamenávat trasy jízd, kvalita,
   minimální přejezd (změna -> přepočet posledních 3 dnů).
+
+### Etapa 3 - co testovat v terénu
+
+Instalace přes Sideloadly jako dřív, appku NEMAŽ (migrace v3 + záloha
+při prvním startu). Režim **Úsporný**, Poloha a trasy -> Zaznamenávat
+trasy jízd ZAP; ladicí deník zapnutý.
+
+1. **Ikona a start:** nová ikona DO; po spuštění značka na tmavém
+   splashi -> animace (helma, kruh, ručičky, CHÁZKA) -> kalendář.
+   Otevření appky probuzené polohou na pozadí = bez animace. S iOS
+   "Omezit pohyb" jen statické logo.
+2. **Minulé dny:** 2.-4. 10. mají přejezdy s "≈ km" (odhad), v deníku
+   "přejezd z doby před etapou 3".
+3. **Jízda (hlavní test):** odjeď z uloženého místa, jeď aspoň pár km,
+   přijeď na jiné místo. V deníku: START JÍZDY (důvod, odjezd), KONEC
+   JÍZDY (body, km, **zpoždění startu GPS**), PŘEJEZD (km, odhad ne).
+   V detailu dne "Přejezd · X km · Y min" a žlutá trasa na mapě.
+   Porovnej km s tachometrem / mapou.
+4. **Krátká zastávka bez uloženého místa** (benzínka > 10 min) - nesmí
+   rozbít přejezd; stání ~10 min vypne GPS (KONEC JÍZDY "stání 10 min").
+5. **Selhání:** když START JÍZDY chybí nebo KONEC hlásí "žádné body",
+   přejezd musí být odhad s důvodem v deníku - pošli export.
+6. **Mapa:** klepnutí na pobyt/přejezd v seznamu zvýrazní a přiblíží;
+   klepnutí na mapu = celá obrazovka; soukromá místa šedě s domkem.
+7. **Přejezd -> upravit:** ruční km, soukromá jízda (zmizí z km dne i
+   NAJETO KM), vozidlo, PŘIDAT KM DO PRÁCE A STROJŮ (položka v km se
+   sazbou + příplatek o víkendu), součet přejezdů dne, Zahodit trasu,
+   Smazat.
+8. **Kvalita trasy** úsporná vs. přesná - porovnej trasu na mapě a
+   spotřebu.
+9. **Baterie:** zapiš si % ráno a večer + kolik jsi jel; v deníku je
+   baterie u START/KONEC JÍZDY. Odhad: mimo jízdu beze změny (~7 %/den),
+   jízda úsporná ~3-5 %/h, přesná ~6-10 %/h.
 
 ### Migrace v3 (`user_version` 2 -> 3)
 
