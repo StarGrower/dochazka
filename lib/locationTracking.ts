@@ -16,12 +16,14 @@ import {
   getSettings,
   insertLocationEvents,
   insertLocationPoint,
+  insertRoutePoint,
   listPlaces,
   normalizeIso,
   setInternalValue,
   type NewLocationEvent,
 } from './db';
 import { distanceMeters } from './geo';
+import { evaluateTripSession, stopTripTrackingIfRunning } from './tripTracking';
 import { rebuildVisits, runExclusive } from './visits';
 import VisitMonitorModule from '../modules/visit-monitor/src/VisitMonitorModule';
 import type {
@@ -153,6 +155,16 @@ async function stopGeofencing(): Promise<void> {
 // tu chvíli už neříká nic o čase události, zapíše se zvlášť.
 const LATE_DELIVERY_MS = 2 * 60 * 1000;
 
+// Co vyvolalo start/konec sledování jízdy (do deníku).
+const TRIGGER_LABELS: Record<LocationEventKind, string> = {
+  visit_arrival: 'CLVisit příjezd',
+  visit_departure: 'CLVisit odjezd',
+  geofence_enter: 'vstup do geofence',
+  geofence_exit: 'výstup z geofence',
+  significant: 'významná změna polohy',
+  point: 'průběžný bod',
+};
+
 const DEBUG_EVENT_TYPES: Record<LocationEventKind, DebugEventType> = {
   visit_arrival: 'arrival',
   visit_departure: 'departure',
@@ -178,11 +190,13 @@ async function ingest(items: IncomingEvent[]): Promise<void> {
   const inserted = await insertLocationEvents(items.map((i) => i.event));
 
   let earliestMs: number | null = null;
+  let newest: { atMs: number; kind: LocationEventKind } | null = null;
   for (let i = 0; i < items.length; i++) {
     if (!inserted[i]) continue;
     const { event, detail, receiptBattery } = items[i];
     const atMs = Date.parse(event.eventAt);
     if (earliestMs === null || atMs < earliestMs) earliestMs = atMs;
+    if (!newest || atMs >= newest.atMs) newest = { atMs, kind: event.kind };
     const late = Date.parse(event.receivedAt) - atMs > LATE_DELIVERY_MS;
     await addDebugLogEntry({
       timestamp: event.eventAt,
@@ -197,6 +211,8 @@ async function ingest(items: IncomingEvent[]): Promise<void> {
   }
 
   if (earliestMs !== null) await rebuildVisits(earliestMs);
+  // Etapa 3: odjezd/příjezd -> zapnout/vypnout GPS jízdy.
+  if (newest) await evaluateTripSession(TRIGGER_LABELS[newest.kind]);
 }
 
 // --- CLVisit a significant location change (nativní modul) ---
@@ -322,6 +338,14 @@ export function processContinuousLocations(locations: Location.LocationObject[])
       if (!isWithinTrackingWindow(settings, at)) continue;
       const eventAt = at.toISOString();
       await insertLocationPoint(eventAt, location.coords.latitude, location.coords.longitude);
+      // Etapa 3: v průběžném režimu jsou tyhle body zároveň body trasy.
+      await insertRoutePoint({
+        timestamp: eventAt,
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        accuracyM: location.coords.accuracy ?? null,
+        speedMps: location.coords.speed !== null && location.coords.speed >= 0 ? location.coords.speed : null,
+      });
       items.push({
         event: { kind: 'point', eventAt, latitude: location.coords.latitude, longitude: location.coords.longitude, accuracyM: location.coords.accuracy ?? null, placeId: null, receivedAt, origin: 'live' },
         detail: 'průběžný bod',
@@ -335,6 +359,10 @@ export function processContinuousLocations(locations: Location.LocationObject[])
 // --- zapnutí/vypnutí sledování podle aktuálního nastavení ---
 
 export async function applyLocationTrackingState(settings: AppSettings): Promise<void> {
+  // GPS jízdy jen v úsporném režimu se zapnutým záznamem tras.
+  if (!settings.locationTrackingEnabled || !settings.routeTrackingEnabled || settings.locationMode !== 'economical') {
+    await stopTripTrackingIfRunning('záznam tras vypnut nebo jiný režim');
+  }
   if (!settings.locationTrackingEnabled) {
     VisitMonitorModule.stopVisitMonitoring();
     VisitMonitorModule.stopSignificantLocationMonitoring();
@@ -390,4 +418,6 @@ export async function initLocationTracking(): Promise<void> {
 
   const settings = await getSettings();
   await applyLocationTrackingState(settings);
+  // Dojela appka na pozadí jízdu, nebo se mezitím přijelo? (pojistky)
+  await runExclusive(() => evaluateTripSession('start appky'));
 }

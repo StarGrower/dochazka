@@ -26,6 +26,9 @@ const EVENT_LABELS: Record<DebugLogEntry['eventType'], string> = {
   significant_change: 'VÝZNAMNÁ ZMĚNA',
   permission: 'OPRÁVNĚNÍ',
   error: 'CHYBA',
+  trip_start: 'START JÍZDY',
+  trip_end: 'KONEC JÍZDY',
+  trip: 'PŘEJEZD',
 };
 
 function formatTimestamp(iso: string): string {

@@ -1,10 +1,11 @@
 import { Barlow_400Regular, Barlow_600SemiBold } from '@expo-google-fonts/barlow';
-import { BarlowCondensed_700Bold } from '@expo-google-fonts/barlow-condensed';
+import { BarlowCondensed_700Bold, BarlowCondensed_800ExtraBold } from '@expo-google-fonts/barlow-condensed';
 import { useFonts } from 'expo-font';
 import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { AppState } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 // Definice background tasků (geofencing, průběžný režim) - musí běžet
@@ -12,6 +13,7 @@ import 'react-native-reanimated';
 // lib/backgroundTasks.ts). Import jen pro vedlejší efekt.
 import '@/lib/backgroundTasks';
 
+import IntroAnimation from '@/components/IntroAnimation';
 import KeyboardDoneAccessory from '@/components/KeyboardDoneAccessory';
 import { colors } from '@/theme';
 import { initDb } from '@/lib/db';
@@ -46,12 +48,20 @@ const navigationTheme = {
 // + inicializace SQLite databáze, viz useEffect níž) je hotová.
 SplashScreen.preventAutoHideAsync();
 
+// Úvodní animace jen při spuštění uživatelem - když iOS appku probudí na
+// pozadí kvůli poloze, proces startuje ve stavu 'background' a animace
+// se nespouští (a nikdy by ji nikdo neviděl).
+const launchedInForeground = AppState.currentState !== 'background';
+
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     Barlow_400Regular,
     Barlow_600SemiBold,
     BarlowCondensed_700Bold,
+    BarlowCondensed_800ExtraBold,
   });
+  const [showIntro, setShowIntro] = useState(launchedInForeground);
+  const finishIntro = useCallback(() => setShowIntro(false), []);
   const [dbReady, setDbReady] = useState(false);
   const [dbError, setDbError] = useState<Error | null>(null);
 
@@ -76,13 +86,15 @@ export default function RootLayout() {
 
   const ready = fontsLoaded && dbReady;
 
+  // S úvodní animací se nativní splash (statická značka na #131311)
+  // schová hned po fontech - animace pak běží souběžně s načítáním DB.
   useEffect(() => {
-    if (ready) {
+    if (showIntro ? fontsLoaded : ready) {
       SplashScreen.hideAsync();
     }
-  }, [ready]);
+  }, [showIntro, fontsLoaded, ready]);
 
-  if (!ready) {
+  if (!fontsLoaded || (!ready && !showIntro)) {
     return null;
   }
 
@@ -90,25 +102,30 @@ export default function RootLayout() {
     // react-native-gesture-handler (potřebuje reanimated-color-picker,
     // ČÁST 2 - vlastní odstín) vyžaduje tenhle wrapper NAD celou appkou,
     // ne jen kolem obrazovky, co gesta používá.
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider value={navigationTheme}>
-        <StatusBar style="light" />
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="day/[date]" />
-          <Stack.Screen name="settings/categories" />
-          <Stack.Screen name="settings/zapisy" />
-          <Stack.Screen name="settings/poloha" />
-          <Stack.Screen name="settings/places" />
-          <Stack.Screen name="settings/place-edit" />
-          <Stack.Screen name="settings/aplikace" />
-          <Stack.Screen name="settings/debug-log" />
-          <Stack.Screen name="settings/odberatele" />
-        </Stack>
-        {/* Globální "Hotovo" lišta nad číselnou klávesnicí (ČÁST 1 oprava) -
-            mountuje se JEDNOU tady, viz components/KeyboardDoneAccessory.tsx. */}
-        <KeyboardDoneAccessory />
-      </ThemeProvider>
+    // Úvodní animace je VŽDY na stejném místě stromu (poslední dítě) -
+    // dokončení načítání DB ji tak nepřemountuje a nezačne znovu.
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
+      {ready && (
+        <ThemeProvider value={navigationTheme}>
+          <StatusBar style="light" />
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="day/[date]" />
+            <Stack.Screen name="settings/categories" />
+            <Stack.Screen name="settings/zapisy" />
+            <Stack.Screen name="settings/poloha" />
+            <Stack.Screen name="settings/places" />
+            <Stack.Screen name="settings/place-edit" />
+            <Stack.Screen name="settings/aplikace" />
+            <Stack.Screen name="settings/debug-log" />
+            <Stack.Screen name="settings/odberatele" />
+          </Stack>
+          {/* Globální "Hotovo" lišta nad číselnou klávesnicí (ČÁST 1 oprava) -
+              mountuje se JEDNOU tady, viz components/KeyboardDoneAccessory.tsx. */}
+          <KeyboardDoneAccessory />
+        </ThemeProvider>
+      )}
+      {showIntro && <IntroAnimation ready={ready} onFinish={finishIntro} />}
     </GestureHandlerRootView>
   );
 }

@@ -12,8 +12,109 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Test v terénu proběhl 2.-4. 10. 2026.**
 **Oprava 2 (po terénním testu etapy 2) - HOTOVO (skupiny A-F), build OVĚŘEN (run 37210061504, 13m21s, všechny kroky zelené vč. Swift modulu, `.ipa` ~15 MB). Čeká na test v telefonu - viz "Co otestovat v telefonu (oprava 2)".**
 
-- Etapa 3 (přejezdy, mapa, km) - nezačato.
+**Etapa 3 (přejezdy, trasy, km, mapa) + ikona, logo a úvodní animace - HOTOVO, viz sekce "Etapa 3" níž; čeká na build a test v terénu.**
 - Etapa 4 (export, záloha) - nezačato.
+
+## Etapa 3 - přejezdy, trasy, kilometry, mapa
+
+### Záznam trasy (`lib/tripTracking.ts`)
+
+- Samostatný úkol `dochazka-trip-task` (`startLocationUpdatesAsync`,
+  `AutomotiveNavigation`, `pausesUpdatesAutomatically`). Kvalita:
+  **přesná** = `Accuracy.High` (~10 m) + bod po 50 m; **úsporná** =
+  `Accuracy.Balanced` (~100 m, spíš Wi-Fi/BTS) + bod po 100 m.
+- **NETRIVIÁLNÍ ROZHODNUTÍ - start/konec ze STAVU POBYTŮ** po každém
+  přepočtu (`evaluateTripSession`): poslední pobyt právě skončil (CLVisit
+  odjezd, výstup z geofence nebo významná změna > 1 km - co přijde
+  dřív; CLVisit odjezd chodí se zpožděním) = zapnout GPS; začal nový
+  pobyt = vypnout. Dále vypnutí po ~10 min stání (body do 100 m) a
+  pojistka 4 h. Odjezd starší než 30 min sledování nespustí; po konci
+  sledování se pro stejný pobyt znovu nezapne (`trip_handled_departure`).
+- Jen úsporný režim. V průběžném GPS běží stejně - jeho body se ukládají
+  i jako body trasy (hrubé, interval 5-10 min).
+- Body: `route_points` (přesnost > 100 m a skoky > 200 km/h se zahodí
+  už při příjmu i znovu při výpočtu).
+
+### Přejezdy (`lib/tripPlan.ts` čistě, `lib/trips.ts` s DB)
+
+- **NETRIVIÁLNÍ ROZHODNUTÍ - přejezd je vlastní trvalý řádek** (`trips`),
+  odvozený z mezer mezi pobyty na RŮZNÝCH místech a po každém přepočtu
+  pobytů SLADĚNÝ podle časového překryvu (`matchTrips`) - pobyty mění
+  ID, přejezd ne; ruční úpravy, body a vazba na položku práce přežijí.
+  Ručně smazaný zůstane smazaný; zaniklý (pobyty se sloučily) se měkce
+  smaže (`deleted_by = 'rebuild'`).
+- Délka: místo odjezdu -> body (okno přejezdu ± 2 min) -> místo
+  příjezdu (úsek k 1. bodu vzdušnou čarou - GPS startuje pozdě). Méně
+  než 2 body = **odhad** (vzdušná × 1,3). Pod `minTripMeters` (300 m)
+  se přejezd nepočítá (v průběhu dne zůstane "Přejezd · X min" bez km).
+- Km přejezdu = `km_override` ?? vypočtené. Soukromá jízda se nepočítá
+  do pracovních km (hlavička dne, NAJETO KM v kalendáři - podle dne
+  začátku přejezdu; NAJETO KM je teď z přejezdů, ne z položek v km).
+- **Ladicí deník:** START JÍZDY (důvod, odjezd, kvalita, baterie),
+  KONEC JÍZDY (důvod, počet bodů, km, **zpoždění startu GPS** = 1. bod -
+  odjezd; bez bodů důvod), PŘEJEZD po dokončení (km, odhad ano/ne +
+  důvod, body, zpoždění). Důvody chybějících bodů: start GPS selhal (text
+  chyby), GPS nedodala body, záznam tras vypnutý, průběžný režim,
+  přejezd z doby před etapou 3.
+
+### UI
+
+- **Mapa** (`components/DayMap.tsx`, `react-native-maps`, Apple Maps
+  `mutedStandard` + dark, 200 px, klepnutí = celá obrazovka): trasy
+  žlutě (soukromé šedě), zastávky žluté čtverečky s číslem, soukromá
+  místa šedě s domkem. Výběr místa v Uložených místech zůstal na
+  `expo-maps` (přepisovat ho nemělo smysl).
+- **Průběh dne:** klepnutí na řádek = zvýraznění a přiblížení na mapě;
+  "upravit" = úprava (pobyt: časy - DŘÍV to bylo klepnutím na řádek;
+  přejezd: `components/TripSheet.tsx`).
+- **TripSheet:** ruční km (+ vrátit vypočtené), soukromá jízda, vozidlo
+  (výchozí = 1. stroj s výchozí jednotkou Kč/km, jinak 1. s Kč/km),
+  "PŘIDAT KM DO PRÁCE A STROJŮ" (položka v km, `source = 'trip'`, sazba
+  a příplatek v okamžiku zápisu; volitelně součet všech pracovních
+  přejezdů dne se stejným vozidlem, které ještě v práci nejsou), přejezd
+  si pamatuje `work_record_id` (po smazání položky jde přidat znovu),
+  "Zahodit trasu" (body `trip_id = -1` -> odhad), smazat přejezd.
+- **Nastavení -> Poloha a trasy:** Zaznamenávat trasy jízd, kvalita,
+  minimální přejezd (změna -> přepočet posledních 3 dnů).
+
+### Migrace v3 (`user_version` 2 -> 3)
+
+Záloha `dochazka-zaloha-pred-etapou-3.db` (stejně jako u opravy 2).
+Tabulky `trips` a `route_points`, sloupec `day_work_records.trip_id`,
+nové klíče nastavení. Minulé přejezdy (mezery mezi už uloženými
+pobyty) se doplní jako odhad (`trips_backfill_pending` ->
+`finishLegacyVisitMigrationIfNeeded`), v deníku "přejezd z doby před
+etapou 3". `location_points` se nepřevádějí. Ověřeno lokálně
+(`private/migration-test.ts`) z v0 i z v2: 4 přejezdy 2.-4. 10. jako
+odhad (~9,7 a ~14,8 km), pobyty beze změny, druhý start nic nemění.
+
+### Baterie (odhad, ověří terén)
+
+Mimo jízdu beze změny (CLVisit + geofence). Během jízdy GPS: úsporná
+~3-5 %/h jízdy, přesná ~6-10 %/h. Baterie se zapisuje u START/KONEC
+JÍZDY - z exportu deníku jde spotřeba na jízdu změřit.
+
+## Ikona, logo a úvodní animace (s etapou 3)
+
+- Zdroje `assets/brand/` (`mark.svg` - souřadnice přesně podle zadání,
+  `icon.svg` - pozadí #131311, značka vycentrovaná podle spočteného
+  ohraničení (střed 54,08/52,54, šířka 95,8, měřítko 0,75), `splash.svg`,
+  `logo.svg`). PNG: `npm i --no-save sharp && node
+  scripts/generate-brand.mjs` -> `assets/images/icon.png` (1024, bez
+  průhlednosti), `splash-icon.png`, `favicon.png`.
+- `components/Logo.tsx` (react-native-svg, Barlow Condensed ExtraBold
+  800 - načítá se v `app/_layout.tsx`). **Rozhodnutí: logo jen na úvodní
+  obrazovce** - v kalendáři by se s šipkami a názvem měsíce tlačilo.
+- `components/IntroAnimation.tsx` (~2,5 s podle zadání). NETRIVIÁLNÍ
+  ROZHODNUTÍ - části loga jsou samostatné vrstvy (vlastní `<Svg>`),
+  rotace/měřítko přes `Animated.View` s `transformOrigin` v pivotu
+  (helma 30/50, hodiny 72/52); kruh přes animovaný `strokeDashoffset`
+  (od vrchu - kruh otočený -90°); text v ořezovém okně od středu hodin.
+  Nativní splash (značka na #131311) zmizí hned po fontech, animace
+  běží souběžně s DB/migracemi; fade až po doběhnutí animace A načtení
+  dat. Animace je v kořeni stromu pořád na stejném místě (dokončení DB
+  ji nepřemountuje). Start na pozadí (`AppState` 'background' při
+  startu procesu) = bez animace. Reduce Motion = statické logo + fade.
 
 ## Oprava 2 - po terénním testu etapy 2
 

@@ -83,7 +83,9 @@ export default function PolohaSettingsScreen() {
     setSettings(next);
     await updateSettings(partial);
     if (next) await applyLocationTrackingState(next);
-    if (partial.minStayMinutes !== undefined) await rebuildRecentVisits().catch(() => {});
+    if (partial.minStayMinutes !== undefined || partial.minTripMeters !== undefined) {
+      await rebuildRecentVisits().catch(() => {});
+    }
   };
 
   const handleToggleTracking = async (value: boolean) => {
@@ -246,6 +248,38 @@ export default function PolohaSettingsScreen() {
             step={1}
             unitLabel="min"
             onChange={(v) => patch({ minStayMinutes: Math.max(0, v) })}
+          />
+        </View>
+
+        <Text style={styles.sectionHeader}>TRASY JÍZD</Text>
+        <ToggleRow
+          label="Zaznamenávat trasy jízd"
+          description="Při přejezdu zapne GPS, po příjezdu ji vypne (jen úsporný režim)"
+          value={settings.routeTrackingEnabled}
+          onValueChange={(v) => patch({ routeTrackingEnabled: v })}
+        />
+        {settings.routeTrackingEnabled && (
+          <SegmentedControl
+            label="Kvalita trasy"
+            value={settings.routeQuality}
+            onChange={(v) => patch({ routeQuality: v })}
+            options={[
+              { label: 'Úsporná', value: 'economical' },
+              { label: 'Přesná', value: 'precise' },
+            ]}
+          />
+        )}
+        <Text style={styles.hint}>
+          Úsporná: poloha ~100 m (méně baterie, trasa hrubší). Přesná: GPS ~10 m, víc baterie během jízdy. Mimo jízdu
+          spotřeba stejná.
+        </Text>
+        <View style={styles.row}>
+          <Text style={styles.label}>Minimální přejezd</Text>
+          <NumPad
+            value={settings.minTripMeters}
+            step={100}
+            unitLabel="m"
+            onChange={(v) => patch({ minTripMeters: Math.max(0, Math.round(v)) })}
           />
         </View>
 

@@ -9,7 +9,7 @@ export type RateUnit = 'hour' | 'day' | 'km';
 
 // Původ položky dne (B2): ruční zápis, potvrzený návrh výchozích
 // položek, nebo potvrzený návrh z pobytů.
-export type DayRecordSource = 'manual' | 'default' | 'suggestion';
+export type DayRecordSource = 'manual' | 'default' | 'suggestion' | 'trip';
 
 // ČÁST 3 (zadání "typ stroj/práce") - čistě informační rozlišení, na
 // nic jiného (geometrii/cenu) nemá vliv - jen jiná ikona v Nastavení.
@@ -97,7 +97,46 @@ export interface VisitWithPlace extends Visit {
   placeRadiusM: number | null;
   placeIsHome: boolean;
   placeIsPrivate: boolean;
+  placeLatitude: number | null;
+  placeLongitude: number | null;
 }
+
+// --- etapa 3 - přejezdy ---
+
+// Přejezd mezi dvěma pobyty. ODVOZENÝ z mezer mezi pobyty (lib/trips.ts
+// -> reconcileTrips), ale je to trvalý řádek - nese ruční úpravy (km,
+// soukromá jízda, vozidlo, smazání) a vazbu na položku práce.
+export interface Trip {
+  id: number;
+  startAt: string; // ISO - odjezd
+  endAt: string; // ISO - příjezd
+  fromPlaceId: number | null;
+  fromLatitude: number | null;
+  fromLongitude: number | null;
+  toPlaceId: number | null;
+  toLatitude: number | null;
+  toLongitude: number | null;
+  distanceM: number; // vypočtené z bodů trasy, nebo odhad
+  isEstimate: boolean; // vzdušná vzdálenost × 1,3 (žádné použitelné body)
+  pointCount: number;
+  kmOverride: number | null; // ručně opravené km
+  isPrivate: boolean; // soukromá jízda - nepočítá se do pracovních km
+  vehicleCategoryId: number | null;
+  workRecordId: number | null; // položka práce, do které se km přidaly
+  gpsFirstPointAt: string | null;
+  gpsNote: string | null; // proč chybí body (deník)
+  isDeleted: boolean;
+}
+
+export interface RoutePoint {
+  timestamp: string;
+  latitude: number;
+  longitude: number;
+  accuracyM: number | null;
+  speedMps: number | null;
+}
+
+export type RouteQuality = 'economical' | 'precise';
 
 export type DebugEventType =
   | 'arrival'
@@ -108,7 +147,10 @@ export type DebugEventType =
   | 'app_wake'
   | 'significant_change'
   | 'permission'
-  | 'error';
+  | 'error'
+  | 'trip_start'
+  | 'trip_end'
+  | 'trip';
 
 export interface DebugLogEntry {
   id: number;
@@ -160,6 +202,10 @@ export interface AppSettings {
   trackingStartMinutes: number; // minut od půlnoci, např. 6:00 = 360
   trackingEndMinutes: number; // např. 19:00 = 1140
   minStayMinutes: number; // krátké pobyty pod tohle se ignorují
+  // --- Trasy jízd (etapa 3) ---
+  routeTrackingEnabled: boolean; // GPS během přejezdu (jen úsporný režim)
+  routeQuality: RouteQuality;
+  minTripMeters: number; // kratší přejezd se nepočítá
   // --- interní (ne vlastní obrazovka v Nastavení) ---
   // Poslední vlastní (hex) barvy kategorií - viz components/ColorPicker.tsx,
   // "Naposledy použité".
@@ -188,5 +234,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   trackingStartMinutes: 360, // 6:00
   trackingEndMinutes: 1140, // 19:00
   minStayMinutes: 10,
+  routeTrackingEnabled: true,
+  routeQuality: 'economical',
+  minTripMeters: 300,
   recentCustomColors: [],
 };

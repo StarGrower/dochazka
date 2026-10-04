@@ -1,0 +1,19 @@
+<!-- Ikona aplikace 1024×1024 - pozadí #131311 bez průhlednosti, značka
+     vycentrovaná (ohraničení značky: střed 54,08/52,54, šířka 95,8 ->
+     měřítko 0,75 = ~72 % šířky ikony). PNG: scripts/generate-brand.mjs -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="1024" height="1024">
+  <rect width="100" height="100" fill="#131311"/>
+  <g transform="translate(50 50) scale(0.75) translate(-54.08 -52.54)">
+  <g id="helmet" transform="rotate(-12 30 50)">
+    <rect x="12" y="20" width="10" height="60" rx="5" fill="#F2B705"/>
+    <path d="M23 22a28 28 0 0 1 0 56z" fill="#F2B705"/>
+    <path d="M29 46h13v8H29z" fill="#131311" opacity=".25"/>
+  </g>
+  <g id="clock">
+    <circle cx="72" cy="52" r="25" fill="#131311" stroke="#131311" stroke-width="12"/>
+    <circle cx="72" cy="52" r="25" fill="none" stroke="#F2B705" stroke-width="10"/>
+    <path d="M72 52V39" stroke="#F3F1EA" stroke-width="6" stroke-linecap="round"/>
+    <path d="M72 52h10" stroke="#F3F1EA" stroke-width="6" stroke-linecap="round"/>
+  </g>
+  </g>
+</svg>

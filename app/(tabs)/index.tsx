@@ -3,8 +3,8 @@
 // vlastní měsíční header (šipky + VERZÁLKOVÝ název měsíce), tři
 // souhrnné karty a velké tlačítko "+ ZAPSAT DNEŠEK".
 //
-// "najeto km" karta sčítá položky v km (oprava 2, C1 - km se do etapy 3
-// zadávají ručně u stroje; v etapě 3 se nabídnou z přejezdů).
+// "najeto km" karta = pracovní přejezdy měsíce (etapa 3; soukromé jízdy
+// a smazané přejezdy ne) - podle dne, kdy přejezd začal.
 
 import { useCallback, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -12,7 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 
 import MonthGrid from '@/components/MonthGrid';
-import { getMonthSummary, getSettings } from '@/lib/db';
+import { getMonthSummary, getMonthTripKm, getSettings } from '@/lib/db';
 import { formatHours, monthNameUpper, todayIso } from '@/lib/format';
 import type { MonthDaySummary } from '@/lib/types';
 import { colors, fonts, radii, MIN_TOUCH, fs } from '@/theme';
@@ -26,13 +26,16 @@ export default function CalendarScreen() {
   });
   const [summary, setSummary] = useState<Record<string, MonthDaySummary>>({});
   const [startOnMonday, setStartOnMonday] = useState(true);
+  const [tripKmByDay, setTripKmByDay] = useState<Record<string, number>>({});
 
   const load = useCallback(async () => {
-    const [data, settings] = await Promise.all([
+    const [data, settings, km] = await Promise.all([
       getMonthSummary(visibleMonth.year, visibleMonth.month),
       getSettings(),
+      getMonthTripKm(visibleMonth.year, visibleMonth.month),
     ]);
     setSummary(data);
+    setTripKmByDay(km);
     setStartOnMonday(settings.weekStartsMonday);
   }, [visibleMonth]);
 
@@ -48,15 +51,14 @@ export default function CalendarScreen() {
 
   const monthTotal = useMemo(() => {
     let hours = 0;
-    let km = 0;
     let workDays = 0;
     for (const key in summary) {
       hours += summary[key].hours;
-      km += summary[key].km;
       workDays += 1;
     }
+    const km = Object.values(tripKmByDay).reduce((sum, v) => sum + v, 0);
     return { hours, km, workDays };
-  }, [summary]);
+  }, [summary, tripKmByDay]);
 
   const goToMonth = (delta: number) => {
     setVisibleMonth((current) => {

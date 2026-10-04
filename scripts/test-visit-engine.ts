@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict';
 
 import { buildDayTimeline } from '../lib/dayTimeline';
+import { computeGapTrips, filterRoutePoints, matchTrips, type PlanVisit } from '../lib/tripPlan';
 import { computeVisits, type EngineEvent, type EnginePlace, type EngineVisit } from '../lib/visitEngine';
 
 const A: EnginePlace = { id: 1, latitude: 0.01, longitude: 0.01, radiusM: 150 };
@@ -99,6 +100,47 @@ const tests: Array<[string, () => void]> = [
     const visits = [{ placeId: 1, unknownLatitude: null, unknownLongitude: null, startAt: '2026-01-02T18:34:00.000Z', endAt: null, startUncertain: false }];
     const day = buildDayTimeline(visits, '2026-01-04', Date.parse('2026-01-04T10:00:00Z'));
     assert.ok(day[0].kind === 'stay' && day[0].uncertainEnd);
+  }],
+  // --- etapa 3: přejezdy ---
+  ['přejezd z bodů: místo -> body -> místo, nepřesné a skokové body pryč', () => {
+    const visits: PlanVisit[] = [
+      { placeId: 1, unknownLatitude: null, unknownLongitude: null, placeLatitude: 0, placeLongitude: 0, startAt: '2026-01-05T06:00:00.000Z', endAt: '2026-01-05T08:00:00.000Z', startUncertain: false },
+      { placeId: 2, unknownLatitude: null, unknownLongitude: null, placeLatitude: 0, placeLongitude: 0.1, startAt: '2026-01-05T08:20:00.000Z', endAt: null, startUncertain: false },
+    ];
+    const pt = (min: number, lon: number, accuracyM = 10) => ({ timestamp: `2026-01-05T08:${String(min).padStart(2, '0')}:00.000Z`, latitude: 0, longitude: lon, accuracyM, speedMps: null });
+    const points = [pt(2, 0.02), pt(5, 0.04), pt(6, 0.5), pt(8, 0.06, 500), pt(10, 0.08)];
+    assert.equal(filterRoutePoints(points).length, 3); // skok na 0.5 a přesnost 500 m pryč
+    const [trip] = computeGapTrips(visits, points, 300);
+    assert.equal(trip.isEstimate, false);
+    assert.equal(trip.pointCount, 3);
+    assert.ok(Math.abs(trip.distanceM - 11132) < 50, `vzdálenost ${trip.distanceM}`); // 0,1° délky na rovníku
+    assert.equal(trip.gpsFirstPointAt, '2026-01-05T08:02:00.000Z');
+  }],
+  ['přejezd bez bodů = odhad (vzdušná × 1,3), krátký se nepočítá, stejné místo ne', () => {
+    const v = (placeId: number, lon: number, start: string, end: string | null): PlanVisit => ({ placeId, unknownLatitude: null, unknownLongitude: null, placeLatitude: 0, placeLongitude: lon, startAt: start, endAt: end, startUncertain: false });
+    const visits = [
+      v(1, 0, '2026-01-05T06:00:00.000Z', '2026-01-05T08:00:00.000Z'),
+      v(2, 0.1, '2026-01-05T08:20:00.000Z', '2026-01-05T09:00:00.000Z'),
+      v(3, 0.101, '2026-01-05T09:05:00.000Z', '2026-01-05T10:00:00.000Z'), // ~110 m - pod minimem
+      v(3, 0.101, '2026-01-05T10:20:00.000Z', null), // stejné místo - žádný přejezd
+    ];
+    const trips = computeGapTrips(visits, [], 300);
+    assert.equal(trips.length, 1);
+    assert.ok(trips[0].isEstimate && Math.abs(trips[0].distanceM - 11132 * 1.3) < 60);
+  }],
+  ['sladění přejezdů: shoda podle překryvu, ručně smazaný zůstane smazaný, zaniklý se odebere', () => {
+    const c = (s: string, e: string) => ({ startAt: s, endAt: e, fromPlaceId: 1, fromLatitude: null, fromLongitude: null, toPlaceId: 2, toLatitude: null, toLongitude: null, distanceM: 1000, isEstimate: false, pointCount: 5, gpsFirstPointAt: null });
+    const plan = matchTrips(
+      [c('2026-01-05T08:00:00Z', '2026-01-05T08:20:00Z'), c('2026-01-05T12:00:00Z', '2026-01-05T12:30:00Z'), c('2026-01-05T15:00:00Z', '2026-01-05T15:10:00Z')],
+      [
+        { id: 10, startAt: '2026-01-05T08:05:00Z', endAt: '2026-01-05T08:25:00Z', isDeleted: false, deletedBy: null },
+        { id: 11, startAt: '2026-01-05T12:00:00Z', endAt: '2026-01-05T12:30:00Z', isDeleted: true, deletedBy: 'user' },
+        { id: 12, startAt: '2026-01-05T13:00:00Z', endAt: '2026-01-05T13:30:00Z', isDeleted: false, deletedBy: null },
+      ]
+    );
+    assert.deepEqual(plan.updates.map((u) => u.id), [10]);
+    assert.equal(plan.inserts.length, 1);
+    assert.deepEqual(plan.removals, [12]);
   }],
 ];
 

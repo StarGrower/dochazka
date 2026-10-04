@@ -40,6 +40,8 @@ import type {
   Place,
   RateType,
   RateUnit,
+  RoutePoint,
+  Trip,
   VisitSource,
   VisitWithPlace,
   WorkCategory,
@@ -216,15 +218,19 @@ async function migrateAddCategoryKind(db: SQLite.SQLiteDatabase): Promise<void> 
 // telefonu se nesmí ztratit". Migrace samy nic fyzicky nemažou (jen
 // is_deleted / přesun do *_removed tabulek).
 
-const SCHEMA_VERSION = 2;
-const BACKUP_FILE_NAME = 'dochazka-zaloha-pred-opravami-2.db';
+const SCHEMA_VERSION = 3;
+// Záloha se dělá před první čekající migrací; jméno podle verze, ze které
+// se migruje (existující záloha se nikdy nepřepisuje).
+function backupFileName(fromVersion: number): string {
+  return fromVersion < 2 ? 'dochazka-zaloha-pred-opravami-2.db' : 'dochazka-zaloha-pred-etapou-3.db';
+}
 
 async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: boolean): Promise<void> {
   const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   const version = row?.user_version ?? 0;
   if (version >= SCHEMA_VERSION) return;
 
-  if (hadExistingDb) await backupDatabase(db);
+  if (hadExistingDb) await backupDatabase(db, version);
 
   if (version < 1) {
     await migrateV1LocationEvents(db);
@@ -234,19 +240,24 @@ async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: 
     await migrateV2RatesAndRecords(db);
     await db.execAsync('PRAGMA user_version = 2');
   }
+  if (version < 3) {
+    await migrateV3Trips(db);
+    await db.execAsync('PRAGMA user_version = 3');
+  }
 }
 
-async function backupDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
+async function backupDatabase(db: SQLite.SQLiteDatabase, fromVersion: number): Promise<void> {
   const dir = db.databasePath.substring(0, db.databasePath.lastIndexOf('/'));
-  const target = `${dir}/${BACKUP_FILE_NAME}`.replace(/'/g, "''");
+  const name = backupFileName(fromVersion);
+  const target = `${dir}/${name}`.replace(/'/g, "''");
   try {
     await db.execAsync(`VACUUM INTO '${target}'`);
-    await setInternalValueWith(db, 'backup_before_fixes_2', `ok ${new Date().toISOString()}`);
+    await setInternalValueWith(db, `backup.${name}`, `ok ${new Date().toISOString()}`);
   } catch (err) {
     // Typicky "soubor už existuje" (záloha z dřívějšího pokusu) - ta
     // původní je cennější, nepřepisovat. Migrace jsou nedestruktivní,
     // takže pokračovat i bez nové zálohy je bezpečné.
-    await setInternalValueWith(db, 'backup_before_fixes_2', `chyba: ${String(err)}`);
+    await setInternalValueWith(db, `backup.${name}`, `chyba: ${String(err)}`);
   }
 }
 
@@ -448,6 +459,53 @@ async function migrateV2RatesAndRecords(db: SQLite.SQLiteDatabase): Promise<void
   for (const d of duplicates) await moveRecord(d.id, 'duplicate');
 }
 
+// Etapa 3 - přejezdy a body tras. Jen nové tabulky/sloupce; minulé
+// přejezdy (mezery mezi už uloženými pobyty) doplní jako ODHAD
+// lib/visits.ts -> finishLegacyVisitMigrationIfNeeded (příznak níž).
+async function migrateV3Trips(db: SQLite.SQLiteDatabase): Promise<void> {
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS trips (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      start_at TEXT NOT NULL,
+      end_at TEXT NOT NULL,
+      from_place_id INTEGER,
+      from_latitude REAL,
+      from_longitude REAL,
+      to_place_id INTEGER,
+      to_latitude REAL,
+      to_longitude REAL,
+      distance_m REAL NOT NULL DEFAULT 0,
+      is_estimate INTEGER NOT NULL DEFAULT 0,
+      point_count INTEGER NOT NULL DEFAULT 0,
+      km_override REAL,
+      is_private INTEGER NOT NULL DEFAULT 0,
+      vehicle_category_id INTEGER,
+      work_record_id INTEGER,
+      gps_first_point_at TEXT,
+      gps_note TEXT,
+      logged_at TEXT,
+      user_edited INTEGER NOT NULL DEFAULT 0,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      deleted_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_trips_start_at ON trips (start_at);
+
+    CREATE TABLE IF NOT EXISTS route_points (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trip_id INTEGER,
+      timestamp TEXT NOT NULL,
+      latitude REAL NOT NULL,
+      longitude REAL NOT NULL,
+      accuracy_m REAL,
+      speed_mps REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_route_points_timestamp ON route_points (timestamp);
+    CREATE INDEX IF NOT EXISTS idx_route_points_trip ON route_points (trip_id);
+  `);
+  await addColumnIfMissing(db, 'day_work_records', 'trip_id', 'INTEGER');
+  await setInternalValueWith(db, KEY_TRIPS_BACKFILL_PENDING, '1');
+}
+
 export function normalizeIso(value: string): string {
   const ms = Date.parse(value);
   return Number.isNaN(ms) ? value : new Date(ms).toISOString();
@@ -605,12 +663,13 @@ export async function addDayRecord(record: {
   rateKc: number;
   surchargePct: number;
   source: DayRecordSource;
+  tripId?: number | null;
 }): Promise<number> {
   const db = await getDb();
   const result = await db.runAsync(
-    `INSERT INTO day_work_records (date, category_id, quantity, unit, rate_kc, surcharge_pct, source)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [record.date, record.categoryId, record.quantity, record.unit, record.rateKc, record.surchargePct, record.source]
+    `INSERT INTO day_work_records (date, category_id, quantity, unit, rate_kc, surcharge_pct, source, trip_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [record.date, record.categoryId, record.quantity, record.unit, record.rateKc, record.surchargePct, record.source, record.tripId ?? null]
   );
   return result.lastInsertRowId;
 }
@@ -708,6 +767,9 @@ const SETTINGS_KEYS: { [K in keyof AppSettings]: string } = {
   trackingStartMinutes: 'tracking_start_minutes',
   trackingEndMinutes: 'tracking_end_minutes',
   minStayMinutes: 'min_stay_minutes',
+  routeTrackingEnabled: 'route_tracking_enabled',
+  routeQuality: 'route_quality',
+  minTripMeters: 'min_trip_meters',
   recentCustomColors: 'recent_custom_colors',
 };
 
@@ -771,6 +833,8 @@ export async function wipeAllData(): Promise<void> {
     DELETE FROM location_events;
     DELETE FROM geocode_cache;
     DELETE FROM day_work_records_removed;
+    DELETE FROM trips;
+    DELETE FROM route_points;
   `);
   await seedDefaultCategories(db);
 }
@@ -870,6 +934,8 @@ interface VisitRow {
   place_radius_m: number | null;
   place_is_home: number | null;
   place_is_private: number | null;
+  place_latitude: number | null;
+  place_longitude: number | null;
 }
 
 function mapVisit(row: VisitRow): VisitWithPlace {
@@ -888,11 +954,14 @@ function mapVisit(row: VisitRow): VisitWithPlace {
     placeRadiusM: row.place_radius_m,
     placeIsHome: row.place_is_home === 1,
     placeIsPrivate: row.place_is_private === 1 || row.place_is_home === 1,
+    placeLatitude: row.place_latitude,
+    placeLongitude: row.place_longitude,
   };
 }
 
 const VISIT_SELECT = `SELECT v.*, p.name as place_name, p.radius_m as place_radius_m,
-         p.is_home as place_is_home, p.is_private as place_is_private
+         p.is_home as place_is_home, p.is_private as place_is_private,
+         p.latitude as place_latitude, p.longitude as place_longitude
   FROM visits v
   LEFT JOIN places p ON p.id = v.place_id`;
 
@@ -1089,6 +1158,286 @@ export async function listLocationEvents(fromIso: string | null): Promise<Engine
   }));
 }
 
+// --- přejezdy a body tras (etapa 3) ---
+
+interface TripRow {
+  id: number;
+  start_at: string;
+  end_at: string;
+  from_place_id: number | null;
+  from_latitude: number | null;
+  from_longitude: number | null;
+  to_place_id: number | null;
+  to_latitude: number | null;
+  to_longitude: number | null;
+  distance_m: number;
+  is_estimate: number;
+  point_count: number;
+  km_override: number | null;
+  is_private: number;
+  vehicle_category_id: number | null;
+  work_record_id: number | null;
+  gps_first_point_at: string | null;
+  gps_note: string | null;
+  logged_at: string | null;
+  user_edited: number;
+  is_deleted: number;
+  deleted_by: string | null;
+}
+
+export interface TripWithState extends Trip {
+  loggedAt: string | null;
+  userEdited: boolean;
+  deletedBy: string | null;
+}
+
+function mapTrip(row: TripRow): TripWithState {
+  return {
+    id: row.id,
+    startAt: row.start_at,
+    endAt: row.end_at,
+    fromPlaceId: row.from_place_id,
+    fromLatitude: row.from_latitude,
+    fromLongitude: row.from_longitude,
+    toPlaceId: row.to_place_id,
+    toLatitude: row.to_latitude,
+    toLongitude: row.to_longitude,
+    distanceM: row.distance_m,
+    isEstimate: row.is_estimate === 1,
+    pointCount: row.point_count,
+    kmOverride: row.km_override,
+    isPrivate: row.is_private === 1,
+    vehicleCategoryId: row.vehicle_category_id,
+    workRecordId: row.work_record_id,
+    gpsFirstPointAt: row.gps_first_point_at,
+    gpsNote: row.gps_note,
+    isDeleted: row.is_deleted === 1,
+    loggedAt: row.logged_at,
+    userEdited: row.user_edited === 1,
+    deletedBy: row.deleted_by,
+  };
+}
+
+// Pobyty pro sladění přejezdů (od `fromIso`, null = všechny).
+export async function listVisitsForTrips(fromIso: string | null): Promise<VisitWithPlace[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<VisitRow>(
+    `${VISIT_SELECT}
+     WHERE v.is_deleted = 0 ${fromIso ? 'AND (v.end_at IS NULL OR v.end_at >= ?)' : ''}
+     ORDER BY v.start_at`,
+    fromIso ? [fromIso] : []
+  );
+  return rows.map(mapVisit);
+}
+
+export async function getLatestVisit(): Promise<VisitWithPlace | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<VisitRow>(`${VISIT_SELECT} WHERE v.is_deleted = 0 ORDER BY v.start_at DESC LIMIT 1`);
+  return row ? mapVisit(row) : null;
+}
+
+// Všechny přejezdy (i smazané - kvůli tomu, aby se ručně smazaný znovu
+// neobjevil) končící po `fromIso`.
+export async function listTripsForReconcile(fromIso: string | null): Promise<TripWithState[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<TripRow>(
+    `SELECT * FROM trips ${fromIso ? 'WHERE end_at >= ?' : ''} ORDER BY start_at`,
+    fromIso ? [fromIso] : []
+  );
+  return rows.map(mapTrip);
+}
+
+export interface TripComputedFields {
+  startAt: string;
+  endAt: string;
+  fromPlaceId: number | null;
+  fromLatitude: number | null;
+  fromLongitude: number | null;
+  toPlaceId: number | null;
+  toLatitude: number | null;
+  toLongitude: number | null;
+  distanceM: number;
+  isEstimate: boolean;
+  pointCount: number;
+  gpsFirstPointAt: string | null;
+}
+
+function computedParams(t: TripComputedFields): (string | number | null)[] {
+  return [
+    t.startAt, t.endAt, t.fromPlaceId, t.fromLatitude, t.fromLongitude, t.toPlaceId, t.toLatitude, t.toLongitude,
+    t.distanceM, t.isEstimate ? 1 : 0, t.pointCount, t.gpsFirstPointAt,
+  ];
+}
+
+// Výsledek sladění přejezdů (lib/trips.ts) v jedné transakci. Body trasy
+// se k přejezdu přiřadí podle času (okno přejezdu ± 2 min).
+export async function applyTripPlan(plan: {
+  inserts: TripComputedFields[];
+  updates: Array<{ id: number; fields: TripComputedFields; revive: boolean }>;
+  removals: number[];
+}): Promise<void> {
+  const db = await getDb();
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    const assigned: Array<{ id: number; t: TripComputedFields }> = [];
+    for (const u of plan.updates) {
+      await txn.runAsync(
+        `UPDATE trips SET start_at = ?, end_at = ?, from_place_id = ?, from_latitude = ?, from_longitude = ?,
+           to_place_id = ?, to_latitude = ?, to_longitude = ?, distance_m = ?, is_estimate = ?, point_count = ?,
+           gps_first_point_at = ? ${u.revive ? ', is_deleted = 0, deleted_by = NULL' : ''}
+         WHERE id = ?`,
+        [...computedParams(u.fields), u.id]
+      );
+      assigned.push({ id: u.id, t: u.fields });
+    }
+    for (const t of plan.inserts) {
+      const r = await txn.runAsync(
+        `INSERT INTO trips (start_at, end_at, from_place_id, from_latitude, from_longitude, to_place_id, to_latitude,
+           to_longitude, distance_m, is_estimate, point_count, gps_first_point_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        computedParams(t)
+      );
+      assigned.push({ id: r.lastInsertRowId, t });
+    }
+    for (const id of plan.removals) {
+      await txn.runAsync("UPDATE trips SET is_deleted = 1, deleted_by = 'rebuild' WHERE id = ? AND is_deleted = 0", [id]);
+      await txn.runAsync('UPDATE route_points SET trip_id = NULL WHERE trip_id = ?', [id]);
+    }
+    for (const { id, t } of assigned) {
+      const from = new Date(Date.parse(t.startAt) - 2 * 60000).toISOString();
+      const to = new Date(Date.parse(t.endAt) + 2 * 60000).toISOString();
+      await txn.runAsync(
+        'UPDATE route_points SET trip_id = ? WHERE timestamp >= ? AND timestamp <= ? AND (trip_id IS NULL OR trip_id != -1)',
+        [id, from, to]
+      );
+    }
+  });
+}
+
+// Přejezdy k zapsání do ladicího deníku (dokončené, ještě nezapsané).
+export async function listUnloggedTrips(beforeIso: string): Promise<TripWithState[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<TripRow>(
+    'SELECT * FROM trips WHERE is_deleted = 0 AND logged_at IS NULL AND end_at <= ? ORDER BY start_at',
+    [beforeIso]
+  );
+  return rows.map(mapTrip);
+}
+
+export async function markTripLogged(id: number, gpsNote: string | null): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE trips SET logged_at = ?, gps_note = ? WHERE id = ?', [new Date().toISOString(), gpsNote, id]);
+}
+
+// Přejezdy zasahující do LOKÁLNÍHO dne (i smazané ne).
+export async function getTripsForDay(date: string): Promise<TripWithState[]> {
+  const db = await getDb();
+  const { startMs, endMs } = localDayBounds(date);
+  const rows = await db.getAllAsync<TripRow>(
+    `SELECT t.* FROM trips t
+     WHERE t.is_deleted = 0 AND t.start_at < ? AND t.end_at > ?
+     ORDER BY t.start_at`,
+    [new Date(endMs).toISOString(), new Date(startMs).toISOString()]
+  );
+  // Vazba na položku práce platí jen, dokud položka existuje.
+  const trips = rows.map(mapTrip);
+  const recordIds = trips.flatMap((t) => (t.workRecordId !== null ? [t.workRecordId] : []));
+  if (recordIds.length > 0) {
+    const existing = new Set(
+      (await db.getAllAsync<{ id: number }>(
+        `SELECT id FROM day_work_records WHERE id IN (${recordIds.map(() => '?').join(', ')})`,
+        recordIds
+      )).map((r) => r.id)
+    );
+    for (const t of trips) if (t.workRecordId !== null && !existing.has(t.workRecordId)) t.workRecordId = null;
+  }
+  return trips;
+}
+
+// Pracovní km podle LOKÁLNÍHO dne začátku přejezdu (kalendář).
+export async function getMonthTripKm(year: number, month: number): Promise<Record<string, number>> {
+  const db = await getDb();
+  const from = new Date(year, month - 1, 1).toISOString();
+  const to = new Date(year, month, 1).toISOString();
+  const rows = await db.getAllAsync<{ start_at: string; km: number }>(
+    `SELECT start_at, COALESCE(km_override, distance_m / 1000.0) as km FROM trips
+     WHERE is_deleted = 0 AND is_private = 0 AND start_at >= ? AND start_at < ?`,
+    [from, to]
+  );
+  const result: Record<string, number> = {};
+  for (const r of rows) {
+    const d = new Date(r.start_at);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    result[key] = (result[key] ?? 0) + r.km;
+  }
+  return result;
+}
+
+export async function updateTripUserFields(
+  id: number,
+  fields: { kmOverride: number | null; isPrivate: boolean; vehicleCategoryId: number | null }
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    'UPDATE trips SET km_override = ?, is_private = ?, vehicle_category_id = ?, user_edited = 1 WHERE id = ?',
+    [fields.kmOverride, fields.isPrivate ? 1 : 0, fields.vehicleCategoryId, id]
+  );
+}
+
+// "Zahodit trasu" - body se od přejezdu odpojí a už se k němu nepřiřadí
+// (označí se trip_id = -1), přejezd se přepočítá jako odhad.
+export async function discardTripRoute(id: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE route_points SET trip_id = -1 WHERE trip_id = ?', [id]);
+  await db.runAsync('UPDATE trips SET user_edited = 1 WHERE id = ?', [id]);
+}
+
+export async function deleteTrip(id: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE trips SET is_deleted = 1, deleted_by = 'user' WHERE id = ?", [id]);
+}
+
+export async function setTripsWorkRecord(tripIds: number[], recordId: number): Promise<void> {
+  const db = await getDb();
+  for (const id of tripIds) await db.runAsync('UPDATE trips SET work_record_id = ? WHERE id = ?', [recordId, id]);
+}
+
+export async function insertRoutePoint(p: RoutePoint): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    'INSERT INTO route_points (timestamp, latitude, longitude, accuracy_m, speed_mps) VALUES (?, ?, ?, ?, ?)',
+    [normalizeIso(p.timestamp), p.latitude, p.longitude, p.accuracyM, p.speedMps]
+  );
+}
+
+// Body v časovém rozsahu - bez bodů zahozených u trasy (trip_id = -1).
+export async function listRoutePoints(fromIso: string, toIso: string): Promise<RoutePoint[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ timestamp: string; latitude: number; longitude: number; accuracy_m: number | null; speed_mps: number | null }>(
+    `SELECT timestamp, latitude, longitude, accuracy_m, speed_mps FROM route_points
+     WHERE timestamp >= ? AND timestamp <= ? AND (trip_id IS NULL OR trip_id != -1)
+     ORDER BY timestamp`,
+    [fromIso, toIso]
+  );
+  return rows.map((r) => ({ timestamp: r.timestamp, latitude: r.latitude, longitude: r.longitude, accuracyM: r.accuracy_m, speedMps: r.speed_mps }));
+}
+
+export async function listRoutePointsForTrips(tripIds: number[]): Promise<Map<number, RoutePoint[]>> {
+  const result = new Map<number, RoutePoint[]>();
+  if (tripIds.length === 0) return result;
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ trip_id: number; timestamp: string; latitude: number; longitude: number; accuracy_m: number | null; speed_mps: number | null }>(
+    `SELECT trip_id, timestamp, latitude, longitude, accuracy_m, speed_mps FROM route_points
+     WHERE trip_id IN (${tripIds.map(() => '?').join(', ')}) ORDER BY timestamp`,
+    tripIds
+  );
+  for (const r of rows) {
+    const list = result.get(r.trip_id) ?? [];
+    list.push({ timestamp: r.timestamp, latitude: r.latitude, longitude: r.longitude, accuracyM: r.accuracy_m, speedMps: r.speed_mps });
+    result.set(r.trip_id, list);
+  }
+  return result;
+}
+
 // --- cache názvů obcí (oprava 2, F1/F2) ---
 
 export async function getGeocodeCache(keys: string[]): Promise<Map<string, string>> {
@@ -1116,6 +1465,7 @@ export async function putGeocodeCache(key: string, locality: string): Promise<vo
 // je ignoruje (čte jen klíče z SETTINGS_KEYS).
 
 export const KEY_VISITS_REBUILD_PENDING = 'visits_rebuild_pending';
+export const KEY_TRIPS_BACKFILL_PENDING = 'trips_backfill_pending';
 
 async function setInternalValueWith(db: SQLite.SQLiteDatabase, key: string, value: string): Promise<void> {
   await db.runAsync(

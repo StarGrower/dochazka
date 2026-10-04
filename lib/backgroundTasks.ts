@@ -14,6 +14,7 @@ import {
   handleGeofenceEvent,
   processContinuousLocations,
 } from './locationTracking';
+import { processTripLocations, TRIP_TASK_NAME } from './tripTracking';
 
 interface GeofenceTaskData {
   eventType: Location.LocationGeofencingEventType;
@@ -54,4 +55,21 @@ TaskManager.defineTask<LocationUpdateTaskData>(CONTINUOUS_LOCATION_TASK_NAME, as
   }
   if (!data?.locations?.length) return;
   await processContinuousLocations(data.locations);
+});
+
+// Etapa 3 - body GPS během přejezdu (viz lib/tripTracking.ts).
+TaskManager.defineTask<LocationUpdateTaskData>(TRIP_TASK_NAME, async ({ data, error }) => {
+  if (error) {
+    await addDebugLogEntry({
+      timestamp: new Date().toISOString(),
+      eventType: 'error',
+      detail: `trip location task: ${error.message}`,
+      batteryLevel: null,
+      latitude: null,
+      longitude: null,
+    });
+    return;
+  }
+  if (!data?.locations?.length) return;
+  await processTripLocations(data.locations);
 });

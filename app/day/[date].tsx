@@ -3,6 +3,12 @@
 // PRŮBĚH DNE - pobyty z lib/dayTimeline.ts (oprava 2, A3): úsek pobytu
 // v tomhle dni, přejezdy jen mezi různými místy, soukromá místa tlumeně.
 //
+// MAPA a PŘEJEZDY (etapa 3) - mapa nad průběhem dne (components/
+// DayMap.tsx), přejezd "18 km · 22 min" (≈ = odhad); klepnutí na řádek
+// zvýrazní pobyt/přejezd na mapě, "upravit" otevře úpravu (pobyt:
+// časy; přejezd: components/TripSheet.tsx - km, soukromá jízda,
+// vozidlo, PŘIDAT KM DO PRÁCE A STROJŮ).
+//
 // PRÁCE A STROJE (oprava 2, D2) - žádný přepínač "upravit": "+ Přidat"
 // -> nabídka strojů -> číselník s jednotkou -> OK = uloženo; klepnutí
 // na položku -> úprava množství/jednotky + Smazat (components/
@@ -18,21 +24,30 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
 import BottomSheetModal from '@/components/BottomSheetModal';
+import DayMap, { type DayMapRoute, type DayMapStop } from '@/components/DayMap';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
+import TripSheet, { type TripEdit } from '@/components/TripSheet';
 import WorkItemSheet, { type WorkItemSheetMode } from '@/components/WorkItemSheet';
 import {
   addDayRecord,
   deleteDayRecord,
+  deleteTrip,
   deleteVisit,
+  discardTripRoute,
   getDayNote,
   getDayRecords,
   getSettings,
+  getTripsForDay,
   getVisitsForDay,
   listCategories,
+  listRoutePointsForTrips,
   setDayNote,
+  setTripsWorkRecord,
   updateDayRecord,
+  updateTripUserFields,
   updateVisitTimes,
+  type TripWithState,
 } from '@/lib/db';
 import { buildDayTimeline, localDayBounds, type TimelineStay } from '@/lib/dayTimeline';
 import {
@@ -46,7 +61,9 @@ import {
 } from '@/lib/format';
 import { geocodeKey, nearLocalityLabel, resolveLocalities } from '@/lib/geocode';
 import { holidayName, isWeekend } from '@/lib/holidays';
-import type { AppSettings, DayWorkRecordWithCategory, RateUnit, VisitWithPlace, WorkCategory } from '@/lib/types';
+import { tripKm } from '@/lib/tripPlan';
+import type { AppSettings, DayWorkRecordWithCategory, RateUnit, RoutePoint, Trip, VisitWithPlace, WorkCategory } from '@/lib/types';
+import { refreshTrips } from '@/lib/visits';
 import {
   applyRounding,
   dayDefaultsProposal,
@@ -114,16 +131,23 @@ export default function DayDetailScreen() {
   const [visitEndDraft, setVisitEndDraft] = useState('');
   const [autoAddDone, setAutoAddDone] = useState(false);
   const [localities, setLocalities] = useState<Map<string, string>>(new Map());
+  const [trips, setTrips] = useState<TripWithState[]>([]);
+  const [tripPoints, setTripPoints] = useState<Map<number, RoutePoint[]>>(new Map());
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [tripEditTarget, setTripEditTarget] = useState<Trip | null>(null);
 
   const load = useCallback(async () => {
     if (!date) return;
-    const [s, r, n, c, v] = await Promise.all([
+    const [s, r, n, c, v, t] = await Promise.all([
       getSettings(),
       getDayRecords(date),
       getDayNote(date),
       listCategories(true),
       getVisitsForDay(date),
+      getTripsForDay(date),
     ]);
+    setTrips(t);
+    setTripPoints(await listRoutePointsForTrips(t.map((trip) => trip.id)));
     setSettings(s);
     setRecords(r);
     setNote(n);
@@ -149,6 +173,26 @@ export default function DayDetailScreen() {
     const locality = localities.get(geocodeKey(visit.unknownLatitude, visit.unknownLongitude));
     return locality ? `Neznámé místo · ${nearLocalityLabel(locality)}` : 'Neznámé místo';
   };
+
+  // --- přejezdy (etapa 3) ---
+
+  // Přejezd k řádku "Přejezd" v průběhu dne = největší časový překryv.
+  const tripForTravel = (fromMs: number, toMs: number): TripWithState | null => {
+    let best: { trip: TripWithState; overlap: number } | null = null;
+    for (const trip of trips) {
+      const overlap = Math.min(toMs, Date.parse(trip.endAt)) - Math.max(fromMs, Date.parse(trip.startAt));
+      if (overlap > 0 && (!best || overlap > best.overlap)) best = { trip, overlap };
+    }
+    return best?.trip ?? null;
+  };
+
+  // Přejezd patří ke dni, kdy začal (stejně jako v kalendáři).
+  const dayTrips = trips.filter((t) => {
+    const { startMs, endMs } = localDayBounds(date ?? '');
+    const start = Date.parse(t.startAt);
+    return start >= startMs && start < endMs;
+  });
+  const dayWorkKm = dayTrips.filter((t) => !t.isPrivate).reduce((sum, t) => sum + tripKm(t), 0);
 
   // useCallback je NUTNÝ - bez něj se `load` spustí po každém
   // překreslení a přepíše rozepsané hodnoty v polích (oprava 2).
@@ -355,6 +399,92 @@ export default function DayDetailScreen() {
     openAdd(Math.round(hours * 100) / 100);
   };
 
+  const defaultVehicleId =
+    categories.find((c) => c.defaultUnit === 'km')?.id ?? categories.find((c) => c.rates.km > 0)?.id ?? null;
+
+  const saveTripEdit = async (trip: Trip, edit: TripEdit) => {
+    await updateTripUserFields(trip.id, edit);
+  };
+
+  const handleSaveTrip = async (trip: Trip, edit: TripEdit) => {
+    await saveTripEdit(trip, edit);
+    setTripEditTarget(null);
+    await load();
+  };
+
+  // Pracovní km dne (stejné vozidlo), které ještě nejsou v Práci a
+  // strojích - pro "sečíst všechny přejezdy dne do jedné položky".
+  const unaddedTripsFor = (vehicleId: number | null, current: Trip, currentEdit: TripEdit) =>
+    dayTrips
+      .map((t) => (t.id === current.id ? { ...t, ...currentEdit } : t))
+      .filter(
+        (t) =>
+          !t.isPrivate && t.workRecordId === null && (t.vehicleCategoryId ?? defaultVehicleId) === vehicleId
+      );
+
+  // Bez automatického ukládání - položka vznikne až tímhle potvrzením.
+  // Sazba a příplatek platné v okamžiku zápisu (stejně jako ruční položka).
+  const handleAddTripToWork = async (trip: Trip, edit: TripEdit, wholeDay: boolean) => {
+    if (!date || !settings) return;
+    const vehicle = categoryById.get(edit.vehicleCategoryId ?? -1);
+    if (!vehicle) return;
+    await saveTripEdit(trip, edit);
+    const included = wholeDay ? unaddedTripsFor(vehicle.id, trip, edit) : [{ ...trip, ...edit }];
+    const km = Math.round(included.reduce((sum, t) => sum + tripKm(t), 0) * 10) / 10;
+    const recordId = await addDayRecord({
+      date,
+      categoryId: vehicle.id,
+      quantity: km,
+      unit: 'km',
+      ...priceForRecord(date, vehicle, 'km', settings),
+      source: 'trip',
+      tripId: wholeDay ? null : trip.id,
+    });
+    await setTripsWorkRecord(
+      included.map((t) => t.id),
+      recordId
+    );
+    setTripEditTarget(null);
+    await load();
+  };
+
+  const handleDiscardRoute = (trip: Trip) => {
+    Alert.alert('Zahodit trasu', 'Body trasy se od přejezdu odpojí a km se spočítají jako odhad. Pokračovat?', [
+      { text: 'Zrušit', style: 'cancel' },
+      {
+        text: 'Zahodit',
+        style: 'destructive',
+        onPress: async () => {
+          await discardTripRoute(trip.id);
+          await refreshTrips(Date.parse(trip.startAt));
+          setTripEditTarget(null);
+          await load();
+        },
+      },
+    ]);
+  };
+
+  const handleDeleteTrip = (trip: Trip) => {
+    Alert.alert('Smazat přejezd', 'Přejezd zmizí z průběhu dne i ze součtu km.', [
+      { text: 'Zrušit', style: 'cancel' },
+      {
+        text: 'Smazat',
+        style: 'destructive',
+        onPress: async () => {
+          await deleteTrip(trip.id);
+          setTripEditTarget(null);
+          await load();
+        },
+      },
+    ]);
+  };
+
+  const tripTitle = (trip: Trip): string => {
+    const nameOf = (placeId: number | null) =>
+      placeId === null ? 'neznámé místo' : (visits.find((v) => v.placeId === placeId)?.placeName ?? 'místo');
+    return `${msToHHMM(Date.parse(trip.startAt))}–${msToHHMM(Date.parse(trip.endAt))} · ${nameOf(trip.fromPlaceId)} → ${nameOf(trip.toPlaceId)}`;
+  };
+
   // --- poznámka ---
 
   const saveNote = async () => {
@@ -397,11 +527,40 @@ export default function DayDetailScreen() {
   const holiday = holidayName(date);
   const weekend = isWeekend(date);
 
+  const mapStops: DayMapStop[] = stays.flatMap((stay) => {
+    const v = stay.visit;
+    const latitude = v.placeId !== null ? v.placeLatitude : v.unknownLatitude;
+    const longitude = v.placeId !== null ? v.placeLongitude : v.unknownLongitude;
+    if (latitude === null || longitude === null) return [];
+    return [
+      {
+        key: `visit-${v.id}`,
+        coordinate: { latitude, longitude },
+        label: v.placeIsPrivate ? '⌂' : String(stays.indexOf(stay) + 1),
+        muted: v.placeIsPrivate,
+      },
+    ];
+  });
+  const stopCoordOfPlace = (placeId: number | null, lat: number | null, lon: number | null) => {
+    if (placeId !== null) {
+      const v = visits.find((x) => x.placeId === placeId && x.placeLatitude !== null);
+      return v ? { latitude: v.placeLatitude as number, longitude: v.placeLongitude as number } : null;
+    }
+    return lat !== null && lon !== null ? { latitude: lat, longitude: lon } : null;
+  };
+  const mapRoutes: DayMapRoute[] = trips.flatMap((trip) => {
+    const from = stopCoordOfPlace(trip.fromPlaceId, trip.fromLatitude, trip.fromLongitude);
+    const to = stopCoordOfPlace(trip.toPlaceId, trip.toLatitude, trip.toLongitude);
+    const points = (tripPoints.get(trip.id) ?? []).map((p) => ({ latitude: p.latitude, longitude: p.longitude }));
+    const coordinates = [...(from ? [from] : []), ...points, ...(to ? [to] : [])];
+    return coordinates.length >= 2 ? [{ key: `trip-${trip.id}`, coordinates, muted: trip.isPrivate }] : [];
+  });
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScreenHeader
         title={formatDayHeaderTitle(date)}
-        subtitle={formatDayHeaderSummary(totals.hour, totals.km > 0 ? totals.km : null)}
+        subtitle={formatDayHeaderSummary(totals.hour, dayWorkKm > 0 ? dayWorkKm : null)}
         onBack={handleBack}
       />
       {(holiday || weekend) && (
@@ -419,6 +578,7 @@ export default function DayDetailScreen() {
         ListHeaderComponent={
           <>
             <Text style={styles.sectionHeader}>PRŮBĚH DNE</Text>
+            <DayMap stops={mapStops} routes={mapRoutes} selectedKey={selectedKey} />
 
             {stays.length === 0 ? (
               <View style={styles.mapPlaceholder}>
@@ -427,11 +587,29 @@ export default function DayDetailScreen() {
             ) : (
               timeline.map((item, index) => {
                 if (item.kind === 'travel') {
+                  const trip = tripForTravel(item.fromMs, item.toMs);
+                  const key = trip ? `trip-${trip.id}` : `travel-${index}`;
+                  const kmLabel = trip
+                    ? ` · ${trip.isEstimate && trip.kmOverride === null ? '≈ ' : ''}${formatNumberCs(Math.round(tripKm(trip) * 10) / 10)} km`
+                    : '';
                   return (
-                    <View key={`travel-${index}`} style={styles.travelRow}>
-                      <View style={styles.travelLine} />
-                      <Text style={styles.travelText}>Přejezd · {formatDurationMinutes(item.toMs - item.fromMs)}</Text>
-                    </View>
+                    <TouchableOpacity
+                      key={key}
+                      style={[styles.travelRow, selectedKey === key && styles.travelRowSelected]}
+                      onPress={() => setSelectedKey((k) => (k === key ? null : key))}
+                    >
+                      <View style={[styles.travelLine, trip?.isPrivate && styles.travelLinePrivate]} />
+                      <Text style={styles.travelText}>
+                        Přejezd{kmLabel} · {formatDurationMinutes(item.toMs - item.fromMs)}
+                        {trip?.isPrivate ? ' · soukromá' : ''}
+                        {trip?.workRecordId ? ' · v práci ✓' : ''}
+                      </Text>
+                      {trip && (
+                        <TouchableOpacity onPress={() => setTripEditTarget(trip)} hitSlop={10}>
+                          <Text style={styles.editChip}>upravit</Text>
+                        </TouchableOpacity>
+                      )}
+                    </TouchableOpacity>
                   );
                 }
                 const visit = item.visit;
@@ -439,8 +617,12 @@ export default function DayDetailScreen() {
                 return (
                   <TouchableOpacity
                     key={visit.id}
-                    style={[styles.visitRow, muted && styles.visitRowPrivate]}
-                    onPress={() => openEditVisit(visit)}
+                    style={[
+                      styles.visitRow,
+                      muted && styles.visitRowPrivate,
+                      selectedKey === `visit-${visit.id}` && styles.visitRowSelected,
+                    ]}
+                    onPress={() => setSelectedKey((k) => (k === `visit-${visit.id}` ? null : `visit-${visit.id}`))}
                   >
                     <View style={[styles.visitBadge, muted && styles.visitBadgePrivate]}>
                       <Text style={[styles.visitBadgeText, muted && styles.visitBadgeTextPrivate]}>
@@ -463,11 +645,16 @@ export default function DayDetailScreen() {
                         </TouchableOpacity>
                       )}
                     </View>
-                    <Text style={styles.visitDuration}>
-                      {visit.startUncertain && !item.startsBeforeDay
-                        ? 'začátek neznámý'
-                        : formatDurationMinutes(item.segEndMs - item.segStartMs)}
-                    </Text>
+                    <View style={styles.visitRight}>
+                      <Text style={styles.visitDuration}>
+                        {visit.startUncertain && !item.startsBeforeDay
+                          ? 'začátek neznámý'
+                          : formatDurationMinutes(item.segEndMs - item.segStartMs)}
+                      </Text>
+                      <TouchableOpacity onPress={() => openEditVisit(visit)} hitSlop={10}>
+                        <Text style={styles.editChip}>upravit</Text>
+                      </TouchableOpacity>
+                    </View>
                   </TouchableOpacity>
                 );
               })
@@ -538,6 +725,27 @@ export default function DayDetailScreen() {
         onAddDefaults={handleAddDefaults}
         onSave={handleSaveRecord}
         onDelete={handleDeleteRecord}
+      />
+
+      <TripSheet
+        trip={tripEditTarget}
+        title={tripEditTarget ? tripTitle(tripEditTarget) : ''}
+        vehicles={categories}
+        defaultVehicleId={defaultVehicleId}
+        dayWorkKmNotAdded={
+          tripEditTarget
+            ? unaddedTripsFor(tripEditTarget.vehicleCategoryId ?? defaultVehicleId, tripEditTarget, {
+                kmOverride: tripEditTarget.kmOverride,
+                isPrivate: tripEditTarget.isPrivate,
+                vehicleCategoryId: tripEditTarget.vehicleCategoryId,
+              }).reduce((sum, t) => sum + tripKm(t), 0)
+            : 0
+        }
+        onClose={() => setTripEditTarget(null)}
+        onSave={handleSaveTrip}
+        onAddToWork={handleAddTripToWork}
+        onDiscardRoute={handleDiscardRoute}
+        onDelete={handleDeleteTrip}
       />
 
       <BottomSheetModal visible={visitEditTarget !== null} onClose={() => setVisitEditTarget(null)}>
@@ -685,9 +893,14 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   cancelButton: { height: 44, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
-  travelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 17, marginBottom: 4 },
+  travelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 17, paddingRight: 8, minHeight: 36, marginBottom: 4 },
   travelLine: { width: 2, height: 16, backgroundColor: colors.accent, borderStyle: 'dashed', borderWidth: 1, borderColor: colors.accent },
-  travelText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(11) },
+  travelText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), flex: 1 },
+  travelRowSelected: { backgroundColor: colors.card, borderRadius: radii.card },
+  travelLinePrivate: { backgroundColor: colors.textMuted, borderColor: colors.textMuted },
+  visitRowSelected: { borderWidth: 1, borderColor: colors.accent },
+  visitRight: { alignItems: 'flex-end', gap: 6 },
+  editChip: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: fs(12) },
   visitRow: {
     flexDirection: 'row',
     alignItems: 'center',
