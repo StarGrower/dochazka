@@ -6,7 +6,7 @@ import type { ReactNode } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { router } from 'expo-router';
 
-import { colors, fonts, MIN_TOUCH } from '@/theme';
+import { colors, fonts, MIN_TOUCH, fs } from '@/theme';
 
 interface ScreenHeaderProps {
   title: string;
@@ -39,9 +39,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   backButton: { width: MIN_TOUCH, height: MIN_TOUCH, alignItems: 'center', justifyContent: 'center' },
-  backButtonText: { color: colors.text, fontSize: 28, fontFamily: fonts.body, marginTop: -2 },
+  backButtonText: { color: colors.text, fontSize: fs(28), fontFamily: fonts.body, marginTop: -2 },
   titleBlock: { flex: 1, alignItems: 'center' },
-  title: { color: colors.text, fontFamily: fonts.headingBold, fontSize: 17, letterSpacing: 1 },
-  subtitle: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 13, marginTop: 2 },
+  title: { color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(17), letterSpacing: 1 },
+  subtitle: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(13), marginTop: 2 },
   right: { minWidth: MIN_TOUCH, alignItems: 'flex-end' },
 });

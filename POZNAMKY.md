@@ -10,7 +10,7 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Test na iPhonu, 3 části (klávesnice, barvy, přestavba Nastavení) - HOTOVO.**
 **Etapa 2, ČÁST A (GitHub + sestavení) - HOTOVO, první build na GitHubu OVĚŘEN (13m59s, všechny kroky zelené, `.ipa` 14,7 MB).**
 **Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Test v terénu proběhl 2.-4. 10. 2026.**
-**Oprava 2 (po terénním testu etapy 2) - ROZPRACOVÁNO, viz sekce "Oprava 2" níž. Skupina A (poloha a pobyty) HOTOVO.**
+**Oprava 2 (po terénním testu etapy 2) - HOTOVO (skupiny A-F), viz sekce "Oprava 2" níž; čeká na sestavení a test v telefonu.**
 
 - Etapa 3 (přejezdy, mapa, km) - nezačato.
 - Etapa 4 (export, záloha) - nezačato.
@@ -121,6 +121,85 @@ pole zůstane přesně.
 soukromý (hlídá i `lib/db.ts`). Soukromá se nepočítají do návrhu hodin,
 v průběhu dne jsou tlumená s ikonou domku, v seznamu míst dvě skupiny.
 
+### Skupina B - zápisy (HOTOVO)
+
+- **B1** délka dne šla změnit až po opravě `useCallback` (viz A, bod 6);
+  nově **0 = proměnná pracovní doba** - hodinové položky se
+  nepředvyplňují (`defaultHourlyQuantity` vrátí 0), hodiny jen z pobytů
+  nebo ručně.
+- **B2 NETRIVIÁLNÍ ROZHODNUTÍ - výchozí položky jsou jen NÁVRH.** Nikdy
+  se neuloží otevřením dne (`applyDayDefaultsIfNeeded` a `day_initialized`
+  pryč). V prázdném dni se nabídnou v panelu "+ Přidat" (box "VÝCHOZÍ
+  POLOŽKY" -> "POUŽÍT VÝCHOZÍ"); "+ ZAPSAT DNEŠEK" otevře den rovnou s
+  tímhle panelem (`/day/<datum>?add=1`). Ne pro budoucí dny, volitelně
+  jen v pracovní dny (`defaultsOnlyWorkdays`, výchozí zapnuto - bez
+  víkendů a svátků). Pojistka proti dvojímu uložení: před uložením se
+  ověří, že den je pořád prázdný.
+- Položky mají `source` (manual / default / suggestion).
+
+### Skupina C - stroje, sazby, příplatky (HOTOVO)
+
+- **C1** stroj má `rate_hour_kc`, `rate_day_kc`, `rate_km_kc` +
+  `default_unit`; položka dne má `unit`, `rate_kc` a `surcharge_pct` -
+  **snímek v okamžiku zápisu** (pozdější změna ceníku staré dny nemění).
+  Při zápisu jde jednotku přepnout (h / den / km), číselník se pak ptá
+  na hodiny / dny / km (krok: nastavení / 0,5 / 10). Při úpravě položky
+  a změně jednotky se vezme sazba nové jednotky z aktuálního ceníku,
+  uložený příplatek zůstává. Původní `rate_type`/`rate_kc` u kategorie
+  se dál plní podle výchozí jednotky (CHECK jen hourly/daily), nic na
+  nich nestojí. Kalendář: "NAJETO KM" = součet položek v km.
+- **C2** výchozí víkend % a svátek % v Nastavení -> Zápisy (výchozí 0);
+  u stroje vlastní % (`weekend_pct`/`holiday_pct`, NULL = výchozí, 0 =
+  bez příplatku), zobrazení "Víkend: výchozí (25 %)" / "Víkend: 40 %
+  (vlastní)". Svátek o víkendu = součet. Platí i pro km. Detail dne:
+  "Bagr · 5 h · 850 Kč/h · +25 %", částka už s příplatkem.
+- **C3** `BottomSheetModal`: klepnutí kamkoliv do karty zavře klávesnici
+  (dřív vnitřní onPress nedělal nic), klepnutí mimo kartu při otevřené
+  klávesnici zavře jen klávesnici (ne okno - rozepsané se neztratí).
+  Hodnota se uloží při ztrátě fokusu (onBlur). Panel stroje se roluje.
+  Ostatní editační obrazovky jsou ScrollView/FlatList, kde klepnutí mimo
+  pole klávesnici zavírá samo.
+
+### Skupina D - kalendář a detail dne (HOTOVO)
+
+- **D1** `lib/holidays.ts` - státní a ostatní svátky ČR (zákon
+  245/2000 Sb.), Velký pátek (od 2016) a Velikonoční pondělí z data
+  Velikonoc pro každý rok. Kalendář: víkend tlumeně, svátek červeně +
+  proužek; Detail dne: štítek "Státní svátek · název" / "Víkend".
+- **D2** pryč "UPRAVIT"; "+ Přidat" -> nabídka strojů -> hned číselník +
+  přepínač jednotky -> OK = uloženo; klepnutí na položku -> úprava +
+  Smazat (`components/WorkItemSheet.tsx`). "NAVRHNOUT Z POBYTŮ" otevře
+  stejný panel s navrženými hodinami.
+- **D3** poznámka - příčina byla `useFocusEffect` bez `useCallback`
+  (každé písmeno přepsal `load`); ukládá se při ztrátě fokusu a pro
+  jistotu i při odchodu zpět.
+
+### Skupina E - aplikace (HOTOVO)
+
+- Hmatová odezva úplně pryč (nastavení, `lib/haptics.ts`, balíček
+  `expo-haptics`).
+- **Velikost písma SKUTEČNĚ funguje** - NETRIVIÁLNÍ ROZHODNUTÍ: styly
+  vznikají při načtení modulů (`StyleSheet.create`), takže měřítko se
+  čte SYNCHRONNĚ při startu z `expo-sqlite/kv-store` (klíč
+  `dochazka.fontScale`, zapisuje ho Nastavení -> Aplikace vedle hlavní
+  DB) a všechna `fontSize` v appce jdou přes `fs()` z `theme.ts`
+  ("Větší" = ×1,18). Po přepnutí se appka sama znovu načte
+  (`reloadAppAsync` z `expo`).
+
+### Skupina F - názvy míst (HOTOVO)
+
+- `lib/geocode.ts` - nejbližší obec přes `Location.reverseGeocodeAsync`
+  (Apple, zdarma), **až při zobrazení/exportu** deníku a v průběhu dne
+  (ne při záznamu), cache `geocode_cache` podle souřadnic zaokrouhlených
+  na ~100 m, max. 25 nových dotazů na jedno otevření (limit Apple).
+  Bez sítě zůstanou souřadnice, obec se doplní příště.
+- Deník: "50.08755,14.42139 · u Prahy" (i v exportu); průběh dne:
+  "Neznámé místo · u Obce".
+- NETRIVIÁLNÍ ROZHODNUTÍ - 2. pád ("u Tábora") podle nejčastějších
+  koncovek (-ov/-ín/-ice/-ek/-ec/-ň/-a/-o...); víceslovné názvy se
+  neskloňují ("· Karlovy Vary"). U méně obvyklých jmen může tvar
+  vyjít nepřesně (např. "u Mosta").
+
 ### Migrace v1 (`PRAGMA user_version` 0 -> 1)
 
 Číslované migrace přes `user_version` (`lib/db.ts ->
@@ -146,6 +225,18 @@ z telefonu a poškozenými pobyty) - výsledek přesně podle zadání:
   přejezd, domov 17:08-24:00
 - Ne 4. 10.: domov 0:00-14:32, přejezd 11 min, místo #2 14:43-probíhá
 - záloha obsahuje všechna původní data, druhý start nic nezmění.
+
+### Migrace v2 (`user_version` 1 -> 2) - skupiny B a C
+
+Sloupce sazeb u `work_categories` (naplní se z `rate_type`/`rate_kc`),
+`unit`/`rate_kc`/`surcharge_pct`/`source` u `day_work_records` (jednotka
+a sazba podle kategorie, příplatek 0, source manual), tabulka
+`day_work_records_removed`. **Úklid B2** (podle odpovědi na zadání): do
+`day_work_records_removed` se PŘESUNOU (ne smažou) položky výchozího
+stroje s výchozím množstvím od 2. 10. 2026 (`reason = 'auto_default'`) a
+přesné duplicity (stejný den + stroj + množství, `reason = 'duplicate'`).
+Ověřeno lokálně: 7× "Osobák 8 h" (i zdvojené, budoucí dny, neděle) pryč,
+jiné položky a položky před 2. 10. zůstaly.
 
 Pozor: přiřazení příjezdu k místu #2 vyžaduje poloměr místa aspoň
 ~60 m (CLVisit hlásil bod ~255 m od středu, tolerance je poloměr +

@@ -3,6 +3,14 @@
 
 export type RateType = 'hourly' | 'daily';
 
+// Oprava 2, C1 - jednotka sazby/položky. Stroj může mít vyplněné všechny
+// tři sazby, jedna je výchozí; při zápisu do dne jde jednotku přepnout.
+export type RateUnit = 'hour' | 'day' | 'km';
+
+// Původ položky dne (B2): ruční zápis, potvrzený návrh výchozích
+// položek, nebo potvrzený návrh z pobytů.
+export type DayRecordSource = 'manual' | 'default' | 'suggestion';
+
 // ČÁST 3 (zadání "typ stroj/práce") - čistě informační rozlišení, na
 // nic jiného (geometrii/cenu) nemá vliv - jen jiná ikona v Nastavení.
 export type CategoryKind = 'machine' | 'labor';
@@ -10,8 +18,12 @@ export type CategoryKind = 'machine' | 'labor';
 export interface WorkCategory {
   id: number;
   name: string;
-  rateType: RateType;
-  rateKc: number;
+  rates: Record<RateUnit, number>; // Kč za hodinu / den / km
+  defaultUnit: RateUnit;
+  // Vlastní příplatek v % (C2): null = použij výchozí z Nastavení ->
+  // Zápisy, 0 = bez příplatku.
+  weekendPct: number | null;
+  holidayPct: number | null;
   sortOrder: number;
   isDeleted: boolean;
   color: string; // hex - buď z theme.ts -> categoryPalette, nebo vlastní (viz components/ColorPicker.tsx)
@@ -22,13 +34,17 @@ export interface DayWorkRecord {
   id: number;
   date: string; // YYYY-MM-DD
   categoryId: number;
-  quantity: number; // hodiny (rateType 'hourly') nebo dny/půldny (rateType 'daily')
+  quantity: number; // v jednotce `unit`
+  unit: RateUnit;
+  // Sazba a příplatek uložené v okamžiku zápisu (C1/C2) - pozdější
+  // změna ceníku nemění staré dny.
+  rateKc: number;
+  surchargePct: number;
+  source: DayRecordSource;
 }
 
 export interface DayWorkRecordWithCategory extends DayWorkRecord {
   categoryName: string;
-  rateType: RateType;
-  rateKc: number;
   categoryDeleted: boolean;
   color: string;
 }
@@ -36,6 +52,7 @@ export interface DayWorkRecordWithCategory extends DayWorkRecord {
 export interface MonthDaySummary {
   hours: number;
   days: number;
+  km: number;
 }
 
 // --- ČÁST B (etapa 2) - uložená místa, pobyty, ladicí deník ---
@@ -119,17 +136,19 @@ export type FontScale = 'normal' | 'large';
 
 export interface AppSettings {
   // --- Zápisy ---
-  defaultDayLengthHours: number;
+  defaultDayLengthHours: number; // 0 = proměnná pracovní doba (nic se nepředvyplňuje)
   roundingMinutes: RoundingMinutes;
   numpadStepHours: NumpadStepHours;
   autoSubtractBreak: boolean;
   breakMinutes: number;
   defaultCategoryIds: number[];
+  defaultsOnlyWorkdays: boolean; // výchozí položky nabízet jen v pracovní dny (B2)
+  weekendSurchargePct: number; // výchozí příplatek za víkend (C2)
+  holidaySurchargePct: number; // výchozí příplatek za svátek (C2)
   dayNoteRequired: boolean;
   // --- Aplikace ---
   timeFormat24h: boolean;
   weekStartsMonday: boolean;
-  hapticsEnabled: boolean;
   fontScale: FontScale;
   debugLogEnabled: boolean;
   // --- Poloha a trasy (etapa 2, ČÁST B) ---
@@ -154,10 +173,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoSubtractBreak: false,
   breakMinutes: 30,
   defaultCategoryIds: [],
+  defaultsOnlyWorkdays: true,
+  weekendSurchargePct: 0,
+  holidaySurchargePct: 0,
   dayNoteRequired: false,
   timeFormat24h: true,
   weekStartsMonday: true,
-  hapticsEnabled: true,
   fontScale: 'normal',
   debugLogEnabled: true,
   locationTrackingEnabled: false,

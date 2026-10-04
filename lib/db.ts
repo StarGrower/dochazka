@@ -19,16 +19,12 @@
 // ji dál zobrazí (viz getDayRecords - JOIN ji najde i smazanou).
 //
 // NETRIVIÁLNÍ ROZHODNUTÍ - "quantity" je jedno obecné číslo (ne zvlášť
-// hodiny a zvlášť dny): význam (hodiny, nebo dny/půldny) určuje
-// work_categories.rate_type u navázané kategorie. Zamezuje to dvěma
-// věčně jednomu z nich NULL sloupcům.
+// hodiny, dny a km): význam určuje `day_work_records.unit` (oprava 2 -
+// dřív rate_type kategorie). Zamezuje to věčně poloprázdným sloupcům.
 //
-// NETRIVIÁLNÍ ROZHODNUTÍ - `day_initialized`: "výchozí položky nového
-// dne" (viz lib/workCalc.ts -> applyDayDefaults) se mají předvyplnit
-// jen PRVNÍ návštěvu prázdného dne, ne pokaždé, když je den prázdný -
-// jinak by se uživateli vracely položky, co si úmyslně smazal (den, kdy
-// nepracoval). Tahle tabulka je jediný způsob, jak rozlišit "den ještě
-// nikdy neotevřený" od "den otevřený a vědomě vyprázdněný".
+// Tabulka `day_initialized` je od opravy 2 NEPOUŽÍVANÁ (výchozí položky
+// se už nevkládají samy, jen se nabídnou - viz lib/workCalc.ts ->
+// dayDefaultsProposal). Zůstává jen kvůli kompatibilitě se starší DB.
 
 import * as SQLite from 'expo-sqlite';
 import { paletteColorAt } from '@/theme';
@@ -36,12 +32,14 @@ import { localDayBounds } from './dayTimeline';
 import type {
   AppSettings,
   CategoryKind,
+  DayRecordSource,
   DayWorkRecordWithCategory,
   DebugEventType,
   DebugLogEntry,
   MonthDaySummary,
   Place,
   RateType,
+  RateUnit,
   VisitSource,
   VisitWithPlace,
   WorkCategory,
@@ -66,11 +64,12 @@ const DEFAULT_CATEGORIES: Array<{ name: string; rateType: RateType; kind: Catego
   { name: 'Ruční práce', rateType: 'hourly', kind: 'labor' },
 ];
 
+// Volá se až PO migracích (sloupce default_unit apod. už existují).
 async function seedDefaultCategories(db: SQLite.SQLiteDatabase): Promise<void> {
   for (let i = 0; i < DEFAULT_CATEGORIES.length; i++) {
     const c = DEFAULT_CATEGORIES[i];
     await db.runAsync(
-      'INSERT INTO work_categories (name, rate_type, rate_kc, sort_order, color, kind) VALUES (?, ?, ?, ?, ?, ?)',
+      "INSERT INTO work_categories (name, rate_type, rate_kc, sort_order, color, kind, default_unit) VALUES (?, ?, ?, ?, ?, ?, 'hour')",
       [c.name, c.rateType, 0, i, paletteColorAt(i), c.kind]
     );
   }
@@ -217,7 +216,7 @@ async function migrateAddCategoryKind(db: SQLite.SQLiteDatabase): Promise<void> 
 // telefonu se nesmí ztratit". Migrace samy nic fyzicky nemažou (jen
 // is_deleted / přesun do *_removed tabulek).
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const BACKUP_FILE_NAME = 'dochazka-zaloha-pred-opravami-2.db';
 
 async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: boolean): Promise<void> {
@@ -230,6 +229,10 @@ async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: 
   if (version < 1) {
     await migrateV1LocationEvents(db);
     await db.execAsync('PRAGMA user_version = 1');
+  }
+  if (version < 2) {
+    await migrateV2RatesAndRecords(db);
+    await db.execAsync('PRAGMA user_version = 2');
   }
 }
 
@@ -347,6 +350,104 @@ async function migrateV1LocationEvents(db: SQLite.SQLiteDatabase): Promise<void>
   await setInternalValueWith(db, KEY_VISITS_REBUILD_PENDING, '1');
 }
 
+// Oprava 2, skupiny B a C - sazby h/den/km, příplatky, snímek sazby u
+// položky, příznak původu položky + úklid automaticky vložených
+// výchozích položek.
+async function migrateV2RatesAndRecords(db: SQLite.SQLiteDatabase): Promise<void> {
+  await addColumnIfMissing(db, 'work_categories', 'rate_hour_kc', 'REAL NOT NULL DEFAULT 0');
+  await addColumnIfMissing(db, 'work_categories', 'rate_day_kc', 'REAL NOT NULL DEFAULT 0');
+  await addColumnIfMissing(db, 'work_categories', 'rate_km_kc', 'REAL NOT NULL DEFAULT 0');
+  await addColumnIfMissing(db, 'work_categories', 'default_unit', "TEXT NOT NULL DEFAULT 'hour'");
+  await addColumnIfMissing(db, 'work_categories', 'weekend_pct', 'REAL');
+  await addColumnIfMissing(db, 'work_categories', 'holiday_pct', 'REAL');
+  await db.execAsync(`
+    UPDATE work_categories SET
+      rate_hour_kc = CASE WHEN rate_type = 'hourly' THEN rate_kc ELSE 0 END,
+      rate_day_kc = CASE WHEN rate_type = 'daily' THEN rate_kc ELSE 0 END,
+      default_unit = CASE WHEN rate_type = 'daily' THEN 'day' ELSE 'hour' END;
+  `);
+
+  await addColumnIfMissing(db, 'day_work_records', 'unit', "TEXT NOT NULL DEFAULT 'hour'");
+  await addColumnIfMissing(db, 'day_work_records', 'rate_kc', 'REAL NOT NULL DEFAULT 0');
+  await addColumnIfMissing(db, 'day_work_records', 'surcharge_pct', 'REAL NOT NULL DEFAULT 0');
+  await addColumnIfMissing(db, 'day_work_records', 'source', "TEXT NOT NULL DEFAULT 'manual'");
+  // Stávající položky: jednotka a sazba podle kategorie (dnešní ceník =
+  // jediný, co existoval), bez příplatku (dřív neexistoval).
+  await db.execAsync(`
+    UPDATE day_work_records SET
+      unit = COALESCE((SELECT CASE WHEN c.rate_type = 'daily' THEN 'day' ELSE 'hour' END
+                       FROM work_categories c WHERE c.id = day_work_records.category_id), 'hour'),
+      rate_kc = COALESCE((SELECT c.rate_kc FROM work_categories c WHERE c.id = day_work_records.category_id), 0);
+
+    CREATE TABLE IF NOT EXISTS day_work_records_removed (
+      id INTEGER PRIMARY KEY NOT NULL,
+      date TEXT NOT NULL,
+      category_id INTEGER NOT NULL,
+      quantity REAL NOT NULL,
+      unit TEXT NOT NULL,
+      rate_kc REAL NOT NULL,
+      surcharge_pct REAL NOT NULL,
+      source TEXT NOT NULL,
+      removed_at TEXT NOT NULL,
+      reason TEXT NOT NULL
+    );
+  `);
+
+  // B2 úklid (zadání: "odeber všechny, které odpovídají výchozí položce,
+  // od 2. 10. dál, i v minulých dnech"): položky výchozího stroje s
+  // výchozím množstvím od 2. 10. 2026 (kdy se výchozí položky začaly
+  // vkládat samy) + přesné duplicity (stejný den, stroj, množství).
+  // Nic se nemaže natrvalo - přesun do day_work_records_removed.
+  const stored = new Map(
+    (await db.getAllAsync<{ key: string; value: string }>('SELECT key, value FROM settings')).map((r) => [r.key, r.value])
+  );
+  const readSetting = <T,>(key: string, fallback: T): T => {
+    try {
+      const raw = stored.get(key);
+      return raw === undefined ? fallback : (JSON.parse(raw) as T);
+    } catch {
+      return fallback;
+    }
+  };
+  const defaultIds = readSetting<number[]>('default_category_ids', []);
+  const dayLength = readSetting<number>('default_day_length_hours', 8);
+  const subtractBreak = readSetting<boolean>('auto_subtract_break', false);
+  const breakMinutes = readSetting<number>('break_minutes', 30);
+  const defaultHours = subtractBreak ? Math.max(0, Math.round((dayLength - breakMinutes / 60) * 100) / 100) : dayLength;
+
+  const removedAt = new Date().toISOString();
+  const moveRecord = async (id: number, reason: string) => {
+    await db.runAsync(
+      `INSERT OR IGNORE INTO day_work_records_removed
+         (id, date, category_id, quantity, unit, rate_kc, surcharge_pct, source, removed_at, reason)
+       SELECT id, date, category_id, quantity, unit, rate_kc, surcharge_pct, source, ?, ?
+       FROM day_work_records WHERE id = ?`,
+      [removedAt, reason, id]
+    );
+    await db.runAsync('DELETE FROM day_work_records WHERE id = ?', [id]);
+  };
+
+  if (defaultIds.length > 0) {
+    const candidates = await db.getAllAsync<{ id: number; category_id: number; quantity: number; unit: RateUnit }>(
+      `SELECT id, category_id, quantity, unit FROM day_work_records
+       WHERE date >= '2026-10-02' AND category_id IN (${defaultIds.map(() => '?').join(', ')})`,
+      defaultIds
+    );
+    for (const r of candidates) {
+      const expected = r.unit === 'day' ? 1 : defaultHours;
+      if (Math.abs(r.quantity - expected) < 0.001) await moveRecord(r.id, 'auto_default');
+    }
+  }
+
+  const duplicates = await db.getAllAsync<{ id: number }>(
+    `SELECT r.id FROM day_work_records r
+     WHERE EXISTS (SELECT 1 FROM day_work_records o
+                   WHERE o.date = r.date AND o.category_id = r.category_id
+                     AND o.quantity = r.quantity AND o.id < r.id)`
+  );
+  for (const d of duplicates) await moveRecord(d.id, 'duplicate');
+}
+
 export function normalizeIso(value: string): string {
   const ms = Date.parse(value);
   return Number.isNaN(ms) ? value : new Date(ms).toISOString();
@@ -359,6 +460,12 @@ interface CategoryRow {
   name: string;
   rate_type: RateType;
   rate_kc: number;
+  rate_hour_kc: number;
+  rate_day_kc: number;
+  rate_km_kc: number;
+  default_unit: RateUnit;
+  weekend_pct: number | null;
+  holiday_pct: number | null;
   sort_order: number;
   is_deleted: number;
   color: string;
@@ -369,8 +476,10 @@ function mapCategory(row: CategoryRow): WorkCategory {
   return {
     id: row.id,
     name: row.name,
-    rateType: row.rate_type,
-    rateKc: row.rate_kc,
+    rates: { hour: row.rate_hour_kc, day: row.rate_day_kc, km: row.rate_km_kc },
+    defaultUnit: row.default_unit,
+    weekendPct: row.weekend_pct,
+    holidayPct: row.holiday_pct,
     sortOrder: row.sort_order,
     isDeleted: row.is_deleted === 1,
     color: row.color,
@@ -388,33 +497,49 @@ export async function listCategories(includeDeleted = false): Promise<WorkCatego
   return rows.map(mapCategory);
 }
 
-export async function createCategory(
-  name: string,
-  rateType: RateType,
-  rateKc: number,
-  color: string,
-  kind: CategoryKind
-): Promise<number> {
+export interface CategoryFields {
+  name: string;
+  rates: Record<RateUnit, number>;
+  defaultUnit: RateUnit;
+  weekendPct: number | null;
+  holidayPct: number | null;
+  color: string;
+  kind: CategoryKind;
+}
+
+// Původní sloupce rate_type/rate_kc (CHECK jen hourly/daily) se dál
+// plní podle výchozí jednotky - ať zůstanou smysluplné, nic na nich ale
+// už nestojí.
+function legacyRateColumns(fields: CategoryFields): [RateType, number] {
+  return [fields.defaultUnit === 'day' ? 'daily' : 'hourly', fields.rates[fields.defaultUnit]];
+}
+
+export async function createCategory(fields: CategoryFields): Promise<number> {
   const db = await getDb();
   const maxRow = await db.getFirstAsync<{ maxOrder: number | null }>(
     'SELECT MAX(sort_order) as maxOrder FROM work_categories'
   );
   const sortOrder = (maxRow?.maxOrder ?? -1) + 1;
+  const [rateType, rateKc] = legacyRateColumns(fields);
   const result = await db.runAsync(
-    'INSERT INTO work_categories (name, rate_type, rate_kc, sort_order, color, kind) VALUES (?, ?, ?, ?, ?, ?)',
-    [name, rateType, rateKc, sortOrder, color, kind]
+    `INSERT INTO work_categories
+       (name, rate_type, rate_kc, rate_hour_kc, rate_day_kc, rate_km_kc, default_unit, weekend_pct, holiday_pct, sort_order, color, kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [fields.name, rateType, rateKc, fields.rates.hour, fields.rates.day, fields.rates.km, fields.defaultUnit,
+      fields.weekendPct, fields.holidayPct, sortOrder, fields.color, fields.kind]
   );
   return result.lastInsertRowId;
 }
 
-export async function updateCategory(
-  id: number,
-  fields: { name: string; rateType: RateType; rateKc: number; color: string; kind: CategoryKind }
-): Promise<void> {
+export async function updateCategory(id: number, fields: CategoryFields): Promise<void> {
   const db = await getDb();
+  const [rateType, rateKc] = legacyRateColumns(fields);
   await db.runAsync(
-    'UPDATE work_categories SET name = ?, rate_type = ?, rate_kc = ?, color = ?, kind = ? WHERE id = ?',
-    [fields.name, fields.rateType, fields.rateKc, fields.color, fields.kind, id]
+    `UPDATE work_categories SET name = ?, rate_type = ?, rate_kc = ?, rate_hour_kc = ?, rate_day_kc = ?, rate_km_kc = ?,
+       default_unit = ?, weekend_pct = ?, holiday_pct = ?, color = ?, kind = ?
+     WHERE id = ?`,
+    [fields.name, rateType, rateKc, fields.rates.hour, fields.rates.day, fields.rates.km, fields.defaultUnit,
+      fields.weekendPct, fields.holidayPct, fields.color, fields.kind, id]
   );
 }
 
@@ -431,9 +556,11 @@ interface DayWorkRecordRow {
   date: string;
   category_id: number;
   quantity: number;
-  category_name: string;
-  rate_type: RateType;
+  unit: RateUnit;
   rate_kc: number;
+  surcharge_pct: number;
+  source: DayRecordSource;
+  category_name: string;
   is_deleted: number;
   color: string;
 }
@@ -444,9 +571,11 @@ function mapDayWorkRecord(row: DayWorkRecordRow): DayWorkRecordWithCategory {
     date: row.date,
     categoryId: row.category_id,
     quantity: row.quantity,
-    categoryName: row.category_name,
-    rateType: row.rate_type,
+    unit: row.unit,
     rateKc: row.rate_kc,
+    surchargePct: row.surcharge_pct,
+    source: row.source,
+    categoryName: row.category_name,
     categoryDeleted: row.is_deleted === 1,
     color: row.color,
   };
@@ -455,8 +584,8 @@ function mapDayWorkRecord(row: DayWorkRecordRow): DayWorkRecordWithCategory {
 export async function getDayRecords(date: string): Promise<DayWorkRecordWithCategory[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<DayWorkRecordRow>(
-    `SELECT r.id, r.date, r.category_id, r.quantity,
-            c.name as category_name, c.rate_type, c.rate_kc, c.is_deleted, c.color
+    `SELECT r.id, r.date, r.category_id, r.quantity, r.unit, r.rate_kc, r.surcharge_pct, r.source,
+            c.name as category_name, c.is_deleted, c.color
      FROM day_work_records r
      JOIN work_categories c ON c.id = r.category_id
      WHERE r.date = ?
@@ -466,26 +595,34 @@ export async function getDayRecords(date: string): Promise<DayWorkRecordWithCate
   return rows.map(mapDayWorkRecord);
 }
 
-export async function addDayRecord(
-  date: string,
-  categoryId: number,
-  quantity: number
-): Promise<number> {
+// Sazbu a příplatek spočítá volající (lib/workCalc.ts -> priceForRecord)
+// - datová vrstva je jen uloží.
+export async function addDayRecord(record: {
+  date: string;
+  categoryId: number;
+  quantity: number;
+  unit: RateUnit;
+  rateKc: number;
+  surchargePct: number;
+  source: DayRecordSource;
+}): Promise<number> {
   const db = await getDb();
   const result = await db.runAsync(
-    'INSERT INTO day_work_records (date, category_id, quantity) VALUES (?, ?, ?)',
-    [date, categoryId, quantity]
+    `INSERT INTO day_work_records (date, category_id, quantity, unit, rate_kc, surcharge_pct, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [record.date, record.categoryId, record.quantity, record.unit, record.rateKc, record.surchargePct, record.source]
   );
-  // Ruční přidání položky taky počítá jako "den je inicializovaný" -
-  // viz NETRIVIÁLNÍ ROZHODNUTÍ v hlavičce souboru (ať se po smazání
-  // všeho nepředvyplní znovu výchozí položky).
-  await markDayInitialized(date);
   return result.lastInsertRowId;
 }
 
-export async function updateDayRecordQuantity(id: number, quantity: number): Promise<void> {
+export async function updateDayRecord(id: number, fields: { quantity: number; unit: RateUnit; rateKc: number }): Promise<void> {
   const db = await getDb();
-  await db.runAsync('UPDATE day_work_records SET quantity = ? WHERE id = ?', [quantity, id]);
+  await db.runAsync('UPDATE day_work_records SET quantity = ?, unit = ?, rate_kc = ? WHERE id = ?', [
+    fields.quantity,
+    fields.unit,
+    fields.rateKc,
+    id,
+  ]);
 }
 
 export async function deleteDayRecord(id: number): Promise<void> {
@@ -513,25 +650,11 @@ export async function setDayNote(date: string, note: string): Promise<void> {
   );
 }
 
-// --- "den byl inicializován" (výchozí položky nového dne) ---
-
-export async function isDayInitialized(date: string): Promise<boolean> {
-  const db = await getDb();
-  const row = await db.getFirstAsync('SELECT 1 FROM day_initialized WHERE date = ?', [date]);
-  return row !== null;
-}
-
-export async function markDayInitialized(date: string): Promise<void> {
-  const db = await getDb();
-  await db.runAsync('INSERT OR IGNORE INTO day_initialized (date) VALUES (?)', [date]);
-}
-
 // --- měsíční přehled (kalendář) ---
 
-// Součet za den je jen z HODINOVÝCH položek (viz zadání "u každého dne
-// součet hodin") - denní/půldenní položky nejdou na hodiny převést bez
-// dalšího předpokladu, proto se počítají zvlášť (`days`) a kalendář je
-// zobrazí jako doplňkový údaj vedle hodin, ne sečtené dohromady.
+// Součet za den podle JEDNOTKY položky (zadání "u každého dne součet
+// hodin") - dny a km nejdou na hodiny převést bez dalšího předpokladu,
+// proto se počítají zvlášť a kalendář je zobrazí jako doplňkový údaj.
 export async function getMonthSummary(
   year: number,
   month: number // 1-12
@@ -541,20 +664,20 @@ export async function getMonthSummary(
   const lastDay = new Date(year, month, 0).getDate();
   const to = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
-  const rows = await db.getAllAsync<{ date: string; hours: number; days: number }>(
-    `SELECT r.date as date,
-            SUM(CASE WHEN c.rate_type = 'hourly' THEN r.quantity ELSE 0 END) as hours,
-            SUM(CASE WHEN c.rate_type = 'daily' THEN r.quantity ELSE 0 END) as days
-     FROM day_work_records r
-     JOIN work_categories c ON c.id = r.category_id
-     WHERE r.date BETWEEN ? AND ?
-     GROUP BY r.date`,
+  const rows = await db.getAllAsync<{ date: string; hours: number; days: number; km: number }>(
+    `SELECT date,
+            SUM(CASE WHEN unit = 'hour' THEN quantity ELSE 0 END) as hours,
+            SUM(CASE WHEN unit = 'day' THEN quantity ELSE 0 END) as days,
+            SUM(CASE WHEN unit = 'km' THEN quantity ELSE 0 END) as km
+     FROM day_work_records
+     WHERE date BETWEEN ? AND ?
+     GROUP BY date`,
     [from, to]
   );
 
   const result: Record<string, MonthDaySummary> = {};
   for (const row of rows) {
-    result[row.date] = { hours: row.hours, days: row.days };
+    result[row.date] = { hours: row.hours, days: row.days, km: row.km };
   }
   return result;
 }
@@ -570,10 +693,12 @@ const SETTINGS_KEYS: { [K in keyof AppSettings]: string } = {
   autoSubtractBreak: 'auto_subtract_break',
   breakMinutes: 'break_minutes',
   defaultCategoryIds: 'default_category_ids',
+  defaultsOnlyWorkdays: 'defaults_only_workdays',
+  weekendSurchargePct: 'weekend_surcharge_pct',
+  holidaySurchargePct: 'holiday_surcharge_pct',
   dayNoteRequired: 'day_note_required',
   timeFormat24h: 'time_format_24h',
   weekStartsMonday: 'week_starts_monday',
-  hapticsEnabled: 'haptics_enabled',
   fontScale: 'font_scale',
   debugLogEnabled: 'debug_log_enabled',
   locationTrackingEnabled: 'location_tracking_enabled',
@@ -645,6 +770,7 @@ export async function wipeAllData(): Promise<void> {
     DELETE FROM debug_log;
     DELETE FROM location_events;
     DELETE FROM geocode_cache;
+    DELETE FROM day_work_records_removed;
   `);
   await seedDefaultCategories(db);
 }
@@ -961,6 +1087,27 @@ export async function listLocationEvents(fromIso: string | null): Promise<Engine
     longitude: r.longitude,
     placeId: r.place_id,
   }));
+}
+
+// --- cache názvů obcí (oprava 2, F1/F2) ---
+
+export async function getGeocodeCache(keys: string[]): Promise<Map<string, string>> {
+  if (keys.length === 0) return new Map();
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ key: string; locality: string }>(
+    `SELECT key, locality FROM geocode_cache WHERE key IN (${keys.map(() => '?').join(', ')})`,
+    keys
+  );
+  return new Map(rows.map((r) => [r.key, r.locality]));
+}
+
+export async function putGeocodeCache(key: string, locality: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO geocode_cache (key, locality, looked_up_at) VALUES (?, ?, ?)
+     ON CONFLICT (key) DO UPDATE SET locality = excluded.locality, looked_up_at = excluded.looked_up_at`,
+    [key, locality, new Date().toISOString()]
+  );
 }
 
 // --- interní hodnoty (stav appky, ne uživatelské nastavení) ---

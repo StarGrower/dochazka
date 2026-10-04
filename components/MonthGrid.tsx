@@ -8,8 +8,9 @@
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { formatHours, weekdayShort } from '@/lib/format';
+import { holidayName, isWeekend } from '@/lib/holidays';
 import type { MonthDaySummary } from '@/lib/types';
-import { colors, fonts, radii } from '@/theme';
+import { colors, fonts, radii, fs } from '@/theme';
 
 interface MonthGridProps {
   year: number;
@@ -84,8 +85,12 @@ export default function MonthGrid({ year, month, summary, todayIso, onSelectDay,
         <View key={rowIndex} style={styles.weekRow}>
           {row.map((cell) => {
             const daySummary = summary[cell.iso];
-            const hasRecord = !!daySummary && (daySummary.hours > 0 || daySummary.days > 0);
+            const hasRecord = !!daySummary && (daySummary.hours > 0 || daySummary.days > 0 || daySummary.km > 0);
             const isToday = cell.iso === todayIso;
+            // Oprava 2, D1: víkend tlumeně, státní svátek červeně (+ proužek);
+            // zapisovat do nich jde normálně.
+            const holiday = holidayName(cell.iso) !== null;
+            const weekend = isWeekend(cell.iso);
 
             return (
               <TouchableOpacity
@@ -99,7 +104,17 @@ export default function MonthGrid({ year, month, summary, todayIso, onSelectDay,
                 ]}
                 onPress={() => onSelectDay(cell.iso)}
               >
-                <Text style={[styles.dayNumber, isToday && styles.dayNumberToday]}>{cell.day}</Text>
+                <Text
+                  style={[
+                    styles.dayNumber,
+                    weekend && styles.dayNumberWeekend,
+                    holiday && styles.dayNumberHoliday,
+                    isToday && styles.dayNumberToday,
+                  ]}
+                >
+                  {cell.day}
+                </Text>
+                {holiday && <View style={[styles.holidayBar, isToday && styles.holidayBarToday]} />}
                 {hasRecord && daySummary.hours > 0 && (
                   <Text style={[styles.dayHours, isToday && styles.dayHoursToday]}>
                     {formatHours(daySummary.hours)}
@@ -121,7 +136,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: colors.textMuted,
     fontFamily: fonts.bodySemiBold,
-    fontSize: 11,
+    fontSize: fs(11),
   },
   weekRow: { flexDirection: 'row', gap: 4, marginBottom: 4 },
   dayCell: {
@@ -141,12 +156,16 @@ const styles = StyleSheet.create({
   },
   dayCellOtherMonth: { opacity: 0.35 },
   dayCellToday: { backgroundColor: colors.accent },
-  dayNumber: { color: colors.text, fontFamily: fonts.body, fontSize: 14 },
+  dayNumber: { color: colors.text, fontFamily: fonts.body, fontSize: fs(14) },
   dayNumberToday: { color: colors.onAccent, fontFamily: fonts.bodySemiBold },
+  dayNumberWeekend: { color: colors.textMuted },
+  dayNumberHoliday: { color: colors.danger, fontFamily: fonts.bodySemiBold },
+  holidayBar: { width: 14, height: 2, borderRadius: 1, backgroundColor: colors.danger, marginTop: 2 },
+  holidayBarToday: { backgroundColor: colors.onAccent },
   dayHours: {
     color: colors.accent,
     fontFamily: fonts.headingBold,
-    fontSize: 13,
+    fontSize: fs(13),
     marginTop: 4,
   },
   dayHoursToday: { color: colors.onAccent },

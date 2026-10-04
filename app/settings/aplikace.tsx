@@ -1,27 +1,27 @@
 // Nastavení -> Aplikace (ČÁST 3).
 //
-// NETRIVIÁLNÍ ROZHODNUTÍ - "formát času 24h" a "velikost písma" se
-// ukládají a přepínač funguje, ale VIZUÁLNÍ efekt zatím nemají: appka
-// nikde nezobrazuje čas hodin:minut (není z čeho 12/24h formátovat) a
-// důsledné zavedení škálování písma by znamenalo upravit fontSize ve
-// všech obrazovkách najednou - raději žádný efekt než poloviční
-// (některé obrazovky by škálovaly, jiné ne, což by vypadalo jako bug).
-// Až přijde reálný důvod (etapa 3 časy příjezdu/odjezdu), doplní se.
+// NETRIVIÁLNÍ ROZHODNUTÍ - "formát času 24h" se ukládá, ale vizuální
+// efekt zatím nemá (časy pobytů jsou vždy 24h; 12h formát v české
+// appce nedává smysl - doplní se, kdyby byl důvod).
+// "Velikost písma" (oprava 2, E) SKUTEČNĚ škáluje písmo na všech
+// obrazovkách (theme.ts -> fs); po přepnutí se appka znovu načte.
 // "První den týdne" SKUTEČNĚ ovládá kalendářní mřížku (MonthGrid).
-// "Hmatová odezva" je zapojená v Detailu dne (NumPad, uložení).
+// "Hmatová odezva" byla v opravě 2 úplně odstraněna (zadání E).
 
 import { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { reloadAppAsync } from 'expo';
 import Constants from 'expo-constants';
+import Storage from 'expo-sqlite/kv-store';
 import { router, useFocusEffect } from 'expo-router';
 
 import ScreenHeader from '@/components/ScreenHeader';
 import SegmentedControl from '@/components/SegmentedControl';
 import ToggleRow from '@/components/ToggleRow';
 import { getSettings, updateSettings, wipeAllData } from '@/lib/db';
-import type { AppSettings } from '@/lib/types';
-import { colors, fonts, radii, MIN_TOUCH } from '@/theme';
+import type { AppSettings, FontScale } from '@/lib/types';
+import { colors, fonts, radii, MIN_TOUCH, fs, FONT_SCALE_STORAGE_KEY } from '@/theme';
 
 export default function AplikaceSettingsScreen() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -41,6 +41,21 @@ export default function AplikaceSettingsScreen() {
   const patch = async (partial: Partial<AppSettings>) => {
     setSettings((s) => (s ? { ...s, ...partial } : s));
     await updateSettings(partial);
+  };
+
+  // Styly vznikají při startu (viz theme.ts) - nová velikost písma se
+  // projeví až po znovunačtení appky.
+  const handleFontScale = async (value: FontScale) => {
+    if (!settings || value === settings.fontScale) return;
+    await patch({ fontScale: value });
+    try {
+      Storage.setItemSync(FONT_SCALE_STORAGE_KEY, value);
+    } catch {
+      // bez kv-store zůstane písmo normální - nic dalšího se nerozbije
+    }
+    await reloadAppAsync('velikost písma').catch(() => {
+      Alert.alert('Velikost písma', 'Změna se projeví po zavření a znovuotevření appky.');
+    });
   };
 
   const handleWipe = () => {
@@ -63,6 +78,11 @@ export default function AplikaceSettingsScreen() {
                   style: 'destructive',
                   onPress: async () => {
                     await wipeAllData();
+                    try {
+                      Storage.setItemSync(FONT_SCALE_STORAGE_KEY, 'normal');
+                    } catch {
+                      // viz handleFontScale
+                    }
                     router.replace('/');
                   },
                 },
@@ -90,16 +110,10 @@ export default function AplikaceSettingsScreen() {
           onValueChange={(v) => patch({ weekStartsMonday: v })}
         />
 
-        <ToggleRow
-          label="Hmatová odezva při klepnutí"
-          value={settings.hapticsEnabled}
-          onValueChange={(v) => patch({ hapticsEnabled: v })}
-        />
-
         <SegmentedControl
           label="Velikost písma"
           value={settings.fontScale}
-          onChange={(v) => patch({ fontScale: v })}
+          onChange={handleFontScale}
           options={[
             { label: 'Normální', value: 'normal' },
             { label: 'Větší', value: 'large' },
@@ -162,13 +176,13 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     opacity: 0.5,
   },
-  label: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: 15 },
-  value: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 14 },
-  badge: { color: colors.textMuted, fontFamily: fonts.bodySemiBold, fontSize: 10, letterSpacing: 0.5 },
+  label: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(15) },
+  value: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(14) },
+  badge: { color: colors.textMuted, fontFamily: fonts.bodySemiBold, fontSize: fs(10), letterSpacing: 0.5 },
   sectionHeader: {
     color: colors.textMuted,
     fontFamily: fonts.headingBold,
-    fontSize: 12,
+    fontSize: fs(12),
     letterSpacing: 1,
     marginTop: 12,
     marginBottom: 8,
@@ -182,5 +196,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 4,
   },
-  dangerButtonText: { color: colors.danger, fontFamily: fonts.headingBold, fontSize: 14, letterSpacing: 1 },
+  dangerButtonText: { color: colors.danger, fontFamily: fonts.headingBold, fontSize: fs(14), letterSpacing: 1 },
 });

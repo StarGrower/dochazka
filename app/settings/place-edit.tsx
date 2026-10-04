@@ -21,7 +21,7 @@ import ToggleRow from '@/components/ToggleRow';
 import { createPlace, listPlaces, updatePlace } from '@/lib/db';
 import { refreshGeofences } from '@/lib/locationTracking';
 import { rebuildRecentVisits } from '@/lib/visits';
-import { colors, fonts, radii, MIN_TOUCH } from '@/theme';
+import { colors, fonts, radii, MIN_TOUCH, fs } from '@/theme';
 
 const DEFAULT_COORDS = { latitude: 50.0755, longitude: 14.4378 }; // Praha - jen záložní výchozí, dokud se nezjistí GPS
 
@@ -211,17 +211,17 @@ export default function PlaceEditScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   content: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32 },
-  hint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, marginBottom: 10, lineHeight: 17 },
+  hint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginBottom: 10, lineHeight: 17 },
   mapWrap: { height: 260, borderRadius: radii.card, overflow: 'hidden', marginBottom: 16 },
   map: { flex: 1 },
-  fieldLabel: { color: colors.textMuted, fontFamily: fonts.bodySemiBold, fontSize: 12, marginBottom: 6, marginTop: 10 },
+  fieldLabel: { color: colors.textMuted, fontFamily: fonts.bodySemiBold, fontSize: fs(12), marginBottom: 6, marginTop: 10 },
   input: {
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radii.card,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    fontSize: 16,
+    fontSize: fs(16),
     fontFamily: fonts.body,
     color: colors.text,
     backgroundColor: colors.card,
@@ -236,5 +236,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 24,
   },
-  saveButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: 15, letterSpacing: 1 },
+  saveButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(15), letterSpacing: 1 },
 });

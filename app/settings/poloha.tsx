@@ -23,7 +23,7 @@ import {
 } from '@/lib/locationTracking';
 import type { AppSettings } from '@/lib/types';
 import { rebuildRecentVisits } from '@/lib/visits';
-import { colors, fonts, radii, MIN_TOUCH } from '@/theme';
+import { colors, fonts, radii, MIN_TOUCH, fs } from '@/theme';
 
 const WEEKDAYS: { label: string; value: number }[] = [
   { label: 'PO', value: 1 },
@@ -185,7 +185,6 @@ export default function PolohaSettingsScreen() {
               step={1}
               unitLabel="min"
               onChange={(v) => patch({ continuousIntervalMinutes: Math.min(10, Math.max(5, v)) })}
-              hapticsEnabled={settings.hapticsEnabled}
             />
           </View>
         )}
@@ -247,7 +246,6 @@ export default function PolohaSettingsScreen() {
             step={1}
             unitLabel="min"
             onChange={(v) => patch({ minStayMinutes: Math.max(0, v) })}
-            hapticsEnabled={settings.hapticsEnabled}
           />
         </View>
 
@@ -271,8 +269,8 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 16,
   },
-  warningText: { color: colors.danger, fontFamily: fonts.body, fontSize: 12, lineHeight: 17, marginBottom: 6 },
-  warningLink: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: 13 },
+  warningText: { color: colors.danger, fontFamily: fonts.body, fontSize: fs(12), lineHeight: 17, marginBottom: 6 },
+  warningLink: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: fs(13) },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -284,12 +282,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     minHeight: MIN_TOUCH,
   },
-  label: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: 15 },
-  value: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 14 },
+  label: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(15) },
+  value: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(14) },
   sectionHeader: {
     color: colors.textMuted,
     fontFamily: fonts.headingBold,
-    fontSize: 12,
+    fontSize: fs(12),
     letterSpacing: 1,
     marginTop: 12,
     marginBottom: 8,
@@ -305,7 +303,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   weekdayButtonActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  weekdayButtonText: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: 12 },
+  weekdayButtonText: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(12) },
   weekdayButtonTextActive: { color: colors.onAccent },
   timeInput: {
     borderWidth: 1,
@@ -314,11 +312,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     width: 72,
-    fontSize: 16,
+    fontSize: fs(16),
     fontFamily: fonts.body,
     color: colors.text,
     backgroundColor: colors.background,
     textAlign: 'center',
   },
-  hint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, marginBottom: 12 },
+  hint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginBottom: 12 },
 });

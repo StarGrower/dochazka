@@ -1,26 +1,26 @@
-// Detail dne (vizuální směr "A · Stavba"). Mapa a "PRŮBĚH DNE"
-// (zastávky/přejezdy) ze zadání patří do etapy 3 (potřebují záznam
-// polohy) - místo mrtvého UI je tu jen stručná poznámka, že to přibude
-// později. "PRÁCE A STROJE" je etapa 1 obsah, restylovaná podle zadání
-// + přepínač "upravit"/"hotovo" v záhlaví (vlastní rozhodnutí): výchozí
-// pohled jsou čisté karty beze vstupů (jak design popisuje), teprve
-// "upravit" odhalí NumPad, mazání a tlačítko pro přidání položky.
+// Detail dne (vizuální směr "A · Stavba").
 //
-// ČÁST 3 (Nastavení -> Zápisy) se tu SKUTEČNĚ používá:
-// - výchozí položky nového dne (applyDayDefaultsIfNeeded, jen 1. návštěva)
-// - krok číselníku a zaokrouhlení (NumPad, viz lib/workCalc.ts)
-// - poznámka povinná (varování při odchodu, pokud je prázdná)
-// - hmatová odezva (NumPad kroky, uložení)
+// PRŮBĚH DNE - pobyty z lib/dayTimeline.ts (oprava 2, A3): úsek pobytu
+// v tomhle dni, přejezdy jen mezi různými místy, soukromá místa tlumeně.
+//
+// PRÁCE A STROJE (oprava 2, D2) - žádný přepínač "upravit": "+ Přidat"
+// -> nabídka strojů -> číselník s jednotkou -> OK = uloženo; klepnutí
+// na položku -> úprava množství/jednotky + Smazat (components/
+// WorkItemSheet.tsx). Výchozí položky se NIKDY neuloží samy - v
+// prázdném dni se jen nabídnou v panelu "+ Přidat" (B2).
+//
+// Nastavení -> Zápisy se tu používá: výchozí položky, délka dne, krok
+// číselníku a zaokrouhlení, příplatky, povinná poznámka.
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
 import BottomSheetModal from '@/components/BottomSheetModal';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
-import NumPad from '@/components/NumPad';
 import ScreenHeader from '@/components/ScreenHeader';
+import WorkItemSheet, { type WorkItemSheetMode } from '@/components/WorkItemSheet';
 import {
   addDayRecord,
   deleteDayRecord,
@@ -31,15 +31,31 @@ import {
   getVisitsForDay,
   listCategories,
   setDayNote,
-  updateDayRecordQuantity,
+  updateDayRecord,
   updateVisitTimes,
 } from '@/lib/db';
 import { buildDayTimeline, localDayBounds, type TimelineStay } from '@/lib/dayTimeline';
-import { formatDayHeaderSummary, formatDayHeaderTitle, formatKc } from '@/lib/format';
-import { tapHaptic } from '@/lib/haptics';
-import type { AppSettings, DayWorkRecordWithCategory, VisitWithPlace, WorkCategory } from '@/lib/types';
-import { applyDayDefaultsIfNeeded, applyRounding } from '@/lib/workCalc';
-import { colors, fonts, radii } from '@/theme';
+import {
+  formatDayHeaderSummary,
+  formatDayHeaderTitle,
+  formatKc,
+  formatNumberCs,
+  formatQuantity,
+  todayIso,
+  UNIT_RATE_LABEL,
+} from '@/lib/format';
+import { geocodeKey, nearLocalityLabel, resolveLocalities } from '@/lib/geocode';
+import { holidayName, isWeekend } from '@/lib/holidays';
+import type { AppSettings, DayWorkRecordWithCategory, RateUnit, VisitWithPlace, WorkCategory } from '@/lib/types';
+import {
+  applyRounding,
+  dayDefaultsProposal,
+  priceForRecord,
+  recordAmountKc,
+  surchargePctFor,
+  type DefaultItemProposal,
+} from '@/lib/workCalc';
+import { colors, fonts, radii, fs } from '@/theme';
 
 function msToHHMM(ms: number): string {
   const d = new Date(ms);
@@ -67,6 +83,13 @@ function shortDate(ms: number): string {
   return `${d.getDate()}. ${d.getMonth() + 1}.`;
 }
 
+function formatDurationMinutes(ms: number): string {
+  const totalMin = Math.max(0, Math.round(ms / 60000));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h} h ${m} min` : `${m} min`;
+}
+
 // Úsek pobytu v tomhle dni - "0:00" / "24:00" u pobytu přes půlnoc,
 // "probíhá" u dnešního probíhajícího, "?" u neznámého začátku.
 function stayTimeLabel(stay: TimelineStay<VisitWithPlace>): string {
@@ -75,52 +98,57 @@ function stayTimeLabel(stay: TimelineStay<VisitWithPlace>): string {
   return `${from}–${to}`;
 }
 
-function formatDurationMinutes(ms: number): string {
-  const totalMin = Math.max(0, Math.round(ms / 60000));
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  return h > 0 ? `${h} h ${m} min` : `${m} min`;
-}
-
 export default function DayDetailScreen() {
-  const { date } = useLocalSearchParams<{ date: string }>();
+  // `add=1` - otevřeno z "+ ZAPSAT DNEŠEK" (kalendář): rovnou nabídnout přidání.
+  const { date, add } = useLocalSearchParams<{ date: string; add?: string }>();
 
   const [records, setRecords] = useState<DayWorkRecordWithCategory[]>([]);
   const [note, setNote] = useState('');
-  const [categories, setCategories] = useState<WorkCategory[]>([]);
+  const [allCategories, setAllCategories] = useState<WorkCategory[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [editMode, setEditMode] = useState(false);
+  const [sheetMode, setSheetMode] = useState<WorkItemSheetMode | null>(null);
   const [visits, setVisits] = useState<VisitWithPlace[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [visitEditTarget, setVisitEditTarget] = useState<VisitWithPlace | null>(null);
   const [visitStartDraft, setVisitStartDraft] = useState('');
   const [visitEndDraft, setVisitEndDraft] = useState('');
-  // Předvyplněné množství pro NOVOU položku z "NAVRHNOUT Z POBYTŮ" -
-  // zadání "Návrh nic neuloží, dokud ho nepotvrdím": číslo se jen
-  // připraví, skutečně se uloží až výběrem kategorie v pickeru.
-  const [suggestedQuantity, setSuggestedQuantity] = useState<number | null>(null);
+  const [autoAddDone, setAutoAddDone] = useState(false);
+  const [localities, setLocalities] = useState<Map<string, string>>(new Map());
 
   const load = useCallback(async () => {
     if (!date) return;
-    const loadedSettings = await getSettings();
-    setSettings(loadedSettings);
-    // Výchozí položky nového dne - jen při první (prázdné) návštěvě,
-    // viz lib/workCalc.ts.
-    await applyDayDefaultsIfNeeded(date, loadedSettings);
-
-    const [r, n, c, v] = await Promise.all([
+    const [s, r, n, c, v] = await Promise.all([
+      getSettings(),
       getDayRecords(date),
       getDayNote(date),
-      listCategories(),
+      listCategories(true),
       getVisitsForDay(date),
     ]);
+    setSettings(s);
     setRecords(r);
     setNote(n);
-    setCategories(c);
+    setAllCategories(c);
     setVisits(v);
     setNowMs(Date.now());
+    // "Neznámé místo · u Tábora" (F2) - obec se doplní dodatečně.
+    const unknown = v.flatMap((visit) =>
+      visit.placeId === null && visit.unknownLatitude !== null && visit.unknownLongitude !== null
+        ? [{ latitude: visit.unknownLatitude, longitude: visit.unknownLongitude }]
+        : []
+    );
+    if (unknown.length > 0) {
+      resolveLocalities(unknown)
+        .then(setLocalities)
+        .catch(() => {});
+    }
   }, [date]);
+
+  const visitName = (visit: VisitWithPlace): string => {
+    if (visit.placeName) return visit.placeName;
+    if (visit.unknownLatitude === null || visit.unknownLongitude === null) return 'Neznámé místo';
+    const locality = localities.get(geocodeKey(visit.unknownLatitude, visit.unknownLongitude));
+    return locality ? `Neznámé místo · ${nearLocalityLabel(locality)}` : 'Neznámé místo';
+  };
 
   // useCallback je NUTNÝ - bez něj se `load` spustí po každém
   // překreslení a přepíše rozepsané hodnoty v polích (oprava 2).
@@ -130,19 +158,95 @@ export default function DayDetailScreen() {
     }, [load])
   );
 
-  const handleQuantityChange = async (recordId: number, quantity: number) => {
-    setRecords((current) => current.map((r) => (r.id === recordId ? { ...r, quantity } : r)));
-    await updateDayRecordQuantity(recordId, quantity);
-  };
+  const categories = useMemo(() => allCategories.filter((c) => !c.isDeleted), [allCategories]);
+  const categoryById = useMemo(() => new Map(allCategories.map((c) => [c.id, c])), [allCategories]);
+  const proposals = useMemo(
+    () => (settings && date ? dayDefaultsProposal(date, todayIso(), settings, categories, records.length) : []),
+    [settings, date, categories, records.length]
+  );
 
-  const handleAddCategory = async (categoryId: number) => {
-    if (!date) return;
-    tapHaptic(!!settings?.hapticsEnabled);
-    await addDayRecord(date, categoryId, suggestedQuantity ?? 0);
-    setSuggestedQuantity(null);
-    setPickerOpen(false);
+  const openAdd = useCallback(
+    (suggestedHours: number | null = null) => setSheetMode({ kind: 'add', suggestedHours, proposals }),
+    [proposals]
+  );
+
+  // "+ ZAPSAT DNEŠEK" -> panel přidání hned po načtení (jen jednou).
+  useEffect(() => {
+    if (add === '1' && settings && !autoAddDone) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setAutoAddDone(true);
+      openAdd();
+    }
+  }, [add, settings, autoAddDone, openAdd]);
+
+  // --- položky práce ---
+
+  const handleAdd = async (category: WorkCategory, unit: RateUnit, quantity: number) => {
+    if (!date || !settings) return;
+    const suggested = sheetMode?.kind === 'add' && sheetMode.suggestedHours !== null && unit === 'hour';
+    await addDayRecord({
+      date,
+      categoryId: category.id,
+      quantity,
+      unit,
+      ...priceForRecord(date, category, unit, settings),
+      source: suggested ? 'suggestion' : 'manual',
+    });
+    setSheetMode(null);
     await load();
   };
+
+  const handleAddDefaults = async (items: DefaultItemProposal[]) => {
+    if (!date || !settings) return;
+    // Pojistka proti dvojímu uložení (rychlé dvojklepnutí / souběh).
+    if ((await getDayRecords(date)).length > 0) {
+      setSheetMode(null);
+      await load();
+      return;
+    }
+    for (const item of items) {
+      await addDayRecord({
+        date,
+        categoryId: item.category.id,
+        quantity: item.quantity,
+        unit: item.unit,
+        ...priceForRecord(date, item.category, item.unit, settings),
+        source: 'default',
+      });
+    }
+    setSheetMode(null);
+    await load();
+  };
+
+  // Změna jednotky vezme sazbu té jednotky z AKTUÁLNÍHO ceníku; uložený
+  // příplatek položky zůstává.
+  const handleSaveRecord = async (record: DayWorkRecordWithCategory, unit: RateUnit, quantity: number) => {
+    const category = categoryById.get(record.categoryId);
+    const rateKc = unit === record.unit || !category ? record.rateKc : category.rates[unit];
+    await updateDayRecord(record.id, { quantity, unit, rateKc });
+    setSheetMode(null);
+    await load();
+  };
+
+  const handleDeleteRecord = (record: DayWorkRecordWithCategory) => {
+    Alert.alert('Smazat položku', `Smazat "${record.categoryName}" z tohoto dne?`, [
+      { text: 'Zrušit', style: 'cancel' },
+      {
+        text: 'Smazat',
+        style: 'destructive',
+        onPress: async () => {
+          await deleteDayRecord(record.id);
+          setSheetMode(null);
+          await load();
+        },
+      },
+    ]);
+  };
+
+  // --- pobyty ---
+
+  const timeline = date ? buildDayTimeline(visits, date, nowMs) : [];
+  const stays = timeline.filter((i): i is TimelineStay<VisitWithPlace> => i.kind === 'stay');
 
   const openEditVisit = (visit: VisitWithPlace) => {
     setVisitEditTarget(visit);
@@ -217,7 +321,7 @@ export default function DayDetailScreen() {
   // Zadání ČÁST B bod 7 / oprava 2 - jen pobyty mimo soukromá místa,
   // jen úsek v TOMHLE dni a jen v časovém okně záznamu (Nastavení ->
   // Poloha a trasy), s odečtením přestávky a zaokrouhlením podle
-  // Nastavení -> Zápisy (stejná pravidla jako ruční NumPad).
+  // Nastavení -> Zápisy (stejná pravidla jako ruční číselník).
   // Neznámá místa se počítají (typicky nová stavba) - kde to nesedí,
   // pobyt jde smazat nebo místo uložit jako soukromé.
   const handleSuggestFromVisits = () => {
@@ -248,33 +352,20 @@ export default function DayDetailScreen() {
       );
       return;
     }
-    setSuggestedQuantity(Math.round(hours * 100) / 100);
-    setPickerOpen(true);
+    openAdd(Math.round(hours * 100) / 100);
   };
 
-  const handleDeleteRecord = (record: DayWorkRecordWithCategory) => {
-    Alert.alert('Smazat položku', `Smazat "${record.categoryName}" z tohoto dne?`, [
-      { text: 'Zrušit', style: 'cancel' },
-      {
-        text: 'Smazat',
-        style: 'destructive',
-        onPress: async () => {
-          tapHaptic(!!settings?.hapticsEnabled);
-          await deleteDayRecord(record.id);
-          await load();
-        },
-      },
-    ]);
-  };
+  // --- poznámka ---
 
-  const handleNoteBlur = async () => {
+  const saveNote = async () => {
     if (!date) return;
     await setDayNote(date, note);
   };
 
   const noteMissing = !!settings?.dayNoteRequired && note.trim() === '';
 
-  const handleBack = () => {
+  const handleBack = async () => {
+    await saveNote(); // pro jistotu, kdyby pole ještě mělo fokus
     if (noteMissing) {
       Alert.alert('Chybí poznámka', 'Nastavení vyžaduje poznámku ke dni. Opravdu odejít bez ní?', [
         { text: 'Zpět k zápisu', style: 'cancel' },
@@ -287,36 +378,39 @@ export default function DayDetailScreen() {
 
   const totals = records.reduce(
     (acc, r) => {
-      acc.kc += r.quantity * r.rateKc;
-      if (r.rateType === 'hourly') acc.hours += r.quantity;
-      else acc.days += r.quantity;
+      acc.kc += recordAmountKc(r);
+      acc[r.unit] += r.quantity;
       return acc;
     },
-    { kc: 0, hours: 0, days: 0 }
+    { kc: 0, hour: 0, day: 0, km: 0 }
   );
-
-  // Kategorie, co ještě nejsou dnes použité - v pickeru nemá smysl
-  // nabízet duplicitní přidání téhož stroje dvakrát.
-  const usedIds = new Set(records.map((r) => r.categoryId));
-  const pickerOptions = categories.filter((c) => !usedIds.has(c.id));
-
-  const timeline = date ? buildDayTimeline(visits, date, nowMs) : [];
-  const stays = timeline.filter((i): i is TimelineStay<VisitWithPlace> => i.kind === 'stay');
+  const totalsLabel = [
+    totals.hour > 0 ? formatQuantity(totals.hour, 'hour') : null,
+    totals.day > 0 ? formatQuantity(totals.day, 'day') : null,
+    totals.km > 0 ? formatQuantity(totals.km, 'km') : null,
+  ]
+    .filter(Boolean)
+    .join('  +  ');
 
   if (!date || !settings) return null;
+
+  const holiday = holidayName(date);
+  const weekend = isWeekend(date);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScreenHeader
         title={formatDayHeaderTitle(date)}
-        subtitle={formatDayHeaderSummary(totals.hours, null)}
+        subtitle={formatDayHeaderSummary(totals.hour, totals.km > 0 ? totals.km : null)}
         onBack={handleBack}
-        right={
-          <TouchableOpacity onPress={() => setEditMode((v) => !v)} hitSlop={8}>
-            <Text style={styles.editToggleText}>{editMode ? 'HOTOVO' : 'UPRAVIT'}</Text>
-          </TouchableOpacity>
-        }
       />
+      {(holiday || weekend) && (
+        <View style={[styles.dayBadge, holiday ? styles.dayBadgeHoliday : styles.dayBadgeWeekend]}>
+          <Text style={[styles.dayBadgeText, holiday ? styles.dayBadgeTextHoliday : null]}>
+            {holiday ? `Státní svátek · ${holiday}` : 'Víkend'}
+          </Text>
+        </View>
+      )}
 
       <FlatList
         data={records}
@@ -325,7 +419,6 @@ export default function DayDetailScreen() {
         ListHeaderComponent={
           <>
             <Text style={styles.sectionHeader}>PRŮBĚH DNE</Text>
-            <Text style={styles.mapPlaceholderText}>Mapa přijde v etapě 3 - zatím jen seznam pobytů.</Text>
 
             {stays.length === 0 ? (
               <View style={styles.mapPlaceholder}>
@@ -337,9 +430,7 @@ export default function DayDetailScreen() {
                   return (
                     <View key={`travel-${index}`} style={styles.travelRow}>
                       <View style={styles.travelLine} />
-                      <Text style={styles.travelText}>
-                        Přejezd · {formatDurationMinutes(item.toMs - item.fromMs)}
-                      </Text>
+                      <Text style={styles.travelText}>Přejezd · {formatDurationMinutes(item.toMs - item.fromMs)}</Text>
                     </View>
                   );
                 }
@@ -357,9 +448,7 @@ export default function DayDetailScreen() {
                       </Text>
                     </View>
                     <View style={styles.rowMain}>
-                      <Text style={[styles.rowName, muted && styles.textPrivate]}>
-                        {visit.placeName ?? 'Neznámé místo'}
-                      </Text>
+                      <Text style={[styles.rowName, muted && styles.textPrivate]}>{visitName(visit)}</Text>
                       <Text style={styles.rowRate}>{stayTimeLabel(item)}</Text>
                       {item.uncertainEnd && (
                         <TouchableOpacity onPress={() => openEditVisit(visit)} hitSlop={8}>
@@ -396,66 +485,33 @@ export default function DayDetailScreen() {
           </>
         }
         renderItem={({ item }) => (
-          <View style={styles.row}>
+          <TouchableOpacity style={styles.row} onPress={() => setSheetMode({ kind: 'edit', record: item })}>
             <View style={[styles.colorSwatch, { backgroundColor: item.color }]} />
             <View style={styles.rowMain}>
-              <View style={styles.rowNameLine}>
-                <Text style={styles.rowName}>
-                  {item.categoryName}
-                  {item.categoryDeleted ? ' (smazáno)' : ''}
-                </Text>
-                {item.rateType === 'daily' && (
-                  <View style={styles.dailyBadge}>
-                    <Text style={styles.dailyBadgeText}>DENNÍ</Text>
-                  </View>
-                )}
-              </View>
-              {editMode && (
-                <Text style={styles.rowRate}>
-                  {formatKc(item.rateKc)} / {item.rateType === 'hourly' ? 'hodinu' : 'den'}
-                </Text>
-              )}
-            </View>
-
-            {editMode ? (
-              <>
-                <NumPad
-                  value={item.quantity}
-                  step={item.rateType === 'hourly' ? settings.numpadStepHours : 0.5}
-                  unitLabel={item.rateType === 'hourly' ? 'h' : 'd'}
-                  onChange={(next) => handleQuantityChange(item.id, next)}
-                  roundTypedValue={
-                    item.rateType === 'hourly' ? (v) => applyRounding(v, settings.roundingMinutes) : undefined
-                  }
-                  hapticsEnabled={settings.hapticsEnabled}
-                />
-                <TouchableOpacity onPress={() => handleDeleteRecord(item)} hitSlop={10}>
-                  <Text style={styles.deleteLabel}>Smazat</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <Text style={styles.rowQuantity}>
-                {item.quantity} {item.rateType === 'hourly' ? 'h' : item.quantity === 1 ? 'den' : 'dní'}
+              <Text style={styles.rowName}>
+                {item.categoryName}
+                {item.categoryDeleted ? ' (smazáno)' : ''}
               </Text>
-            )}
-          </View>
+              <Text style={styles.rowRate}>
+                {formatQuantity(item.quantity, item.unit)} · {formatNumberCs(item.rateKc)} {UNIT_RATE_LABEL[item.unit]}
+                {item.surchargePct > 0 ? ` · +${formatNumberCs(item.surchargePct)} %` : ''}
+              </Text>
+            </View>
+            <Text style={styles.rowQuantity}>{formatKc(recordAmountKc(item))}</Text>
+          </TouchableOpacity>
         )}
         ListFooterComponent={
           <>
-            {editMode && (
-              <TouchableOpacity style={styles.addRowButton} onPress={() => setPickerOpen(true)}>
-                <Text style={styles.addRowButtonText}>+ Přidat stroj nebo práci</Text>
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity style={styles.addRowButton} onPress={() => openAdd()}>
+              <Text style={styles.addRowButtonText}>+ Přidat stroj nebo práci</Text>
+            </TouchableOpacity>
 
-            <Text style={styles.fieldLabel}>
-              Poznámka{settings.dayNoteRequired ? ' *' : ''}
-            </Text>
+            <Text style={styles.fieldLabel}>Poznámka{settings.dayNoteRequired ? ' *' : ''}</Text>
             <TextInput
               style={[styles.noteInput, noteMissing && styles.noteInputRequired]}
               value={note}
               onChangeText={setNote}
-              onBlur={handleNoteBlur}
+              onBlur={saveNote}
               multiline
               placeholder={settings.dayNoteRequired ? 'Poznámka je povinná' : 'Volitelná poznámka ke dni'}
               placeholderTextColor={colors.textMuted}
@@ -467,59 +523,28 @@ export default function DayDetailScreen() {
       />
 
       <View style={styles.summaryBar}>
-        <Text style={styles.summaryText}>
-          {totals.hours > 0 ? `${formatNumber(totals.hours)} h` : ''}
-          {totals.hours > 0 && totals.days > 0 ? '  +  ' : ''}
-          {totals.days > 0 ? `${formatNumber(totals.days)} d` : ''}
-        </Text>
+        <Text style={styles.summaryText}>{totalsLabel}</Text>
         <Text style={styles.summaryKc}>{formatKc(totals.kc)}</Text>
       </View>
 
-      <BottomSheetModal
-        visible={pickerOpen}
-        onClose={() => {
-          setPickerOpen(false);
-          setSuggestedQuantity(null);
-        }}
-      >
-        <Text style={styles.modalTitle}>PŘIDAT POLOŽKU</Text>
-        {suggestedQuantity !== null && (
-          <Text style={styles.suggestionHint}>
-            Navrženo {suggestedQuantity} h z pobytů - vyber kategorii, do které se mají přidat.
-          </Text>
-        )}
-        <FlatList
-          data={pickerOptions}
-          keyExtractor={(c) => String(c.id)}
-          renderItem={({ item }) => (
-            <TouchableOpacity style={styles.pickerRow} onPress={() => handleAddCategory(item.id)}>
-              <View style={[styles.colorSwatch, { backgroundColor: item.color }]} />
-              <Text style={styles.pickerRowName}>{item.name}</Text>
-              <Text style={styles.pickerRowRate}>
-                {formatKc(item.rateKc)} / {item.rateType === 'hourly' ? 'hodinu' : 'den'}
-              </Text>
-            </TouchableOpacity>
-          )}
-          ListEmptyComponent={
-            <Text style={styles.empty}>Všechny kategorie jsou už pro tenhle den přidané.</Text>
-          }
-        />
-        <TouchableOpacity
-          style={styles.cancelButton}
-          onPress={() => {
-            setPickerOpen(false);
-            setSuggestedQuantity(null);
-          }}
-        >
-          <Text style={styles.cancelButtonText}>Zavřít</Text>
-        </TouchableOpacity>
-      </BottomSheetModal>
+      <WorkItemSheet
+        mode={sheetMode}
+        categories={categories}
+        categoryById={categoryById}
+        settings={settings}
+        surchargePctFor={(category) => surchargePctFor(date, category, settings)}
+        onClose={() => setSheetMode(null)}
+        onAdd={handleAdd}
+        onAddDefaults={handleAddDefaults}
+        onSave={handleSaveRecord}
+        onDelete={handleDeleteRecord}
+      />
 
       <BottomSheetModal visible={visitEditTarget !== null} onClose={() => setVisitEditTarget(null)}>
         <Text style={styles.modalTitle}>UPRAVIT POBYT</Text>
         {visitEditTarget && (
           <>
-            <Text style={styles.fieldLabel}>{visitEditTarget.placeName ?? 'Neznámé místo'}</Text>
+            <Text style={styles.fieldLabel}>{visitName(visitEditTarget)}</Text>
             <Text style={styles.rowRate}>
               {visitEditTarget.startUncertain ? 'začátek neznámý' : `od ${shortDate(Date.parse(visitEditTarget.startAt))}`}
               {visitEditTarget.endAt ? ` · do ${shortDate(Date.parse(visitEditTarget.endAt))}` : ' · bez odjezdu'}
@@ -563,14 +588,20 @@ export default function DayDetailScreen() {
   );
 }
 
-function formatNumber(n: number): string {
-  return (Math.round(n * 100) / 100).toString().replace('.', ',');
-}
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  editToggleText: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: 13, letterSpacing: 0.5 },
   listContent: { paddingHorizontal: 16, paddingBottom: 16 },
+  dayBadge: {
+    alignSelf: 'center',
+    borderRadius: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    marginBottom: 8,
+  },
+  dayBadgeWeekend: { backgroundColor: colors.border },
+  dayBadgeHoliday: { backgroundColor: colors.danger },
+  dayBadgeText: { color: colors.textMuted, fontFamily: fonts.bodySemiBold, fontSize: fs(12) },
+  dayBadgeTextHoliday: { color: colors.text },
   mapPlaceholder: {
     borderWidth: 1,
     borderColor: colors.border,
@@ -579,11 +610,11 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 16,
   },
-  mapPlaceholderText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, textAlign: 'center' },
+  mapPlaceholderText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), textAlign: 'center' },
   sectionHeader: {
     color: colors.textMuted,
     fontFamily: fonts.headingBold,
-    fontSize: 12,
+    fontSize: fs(12),
     letterSpacing: 1,
     marginBottom: 8,
   },
@@ -599,18 +630,9 @@ const styles = StyleSheet.create({
   },
   colorSwatch: { width: 14, height: 14, borderRadius: 3 },
   rowMain: { flex: 1 },
-  rowNameLine: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  rowName: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: 15 },
-  rowRate: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, marginTop: 2 },
-  dailyBadge: {
-    backgroundColor: colors.border,
-    borderRadius: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  dailyBadgeText: { color: colors.textMuted, fontFamily: fonts.bodySemiBold, fontSize: 9, letterSpacing: 0.5 },
-  rowQuantity: { color: colors.accent, fontFamily: fonts.headingBold, fontSize: 16 },
-  deleteLabel: { color: colors.danger, fontFamily: fonts.bodySemiBold, fontSize: 13, marginLeft: 4 },
+  rowName: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(15) },
+  rowRate: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginTop: 2 },
+  rowQuantity: { color: colors.accent, fontFamily: fonts.headingBold, fontSize: fs(16) },
   empty: { color: colors.textMuted, textAlign: 'center', fontFamily: fonts.body, marginVertical: 16 },
   addRowButton: {
     borderWidth: 1,
@@ -622,11 +644,12 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginBottom: 20,
   },
-  addRowButtonText: { color: colors.textMuted, fontFamily: fonts.bodySemiBold, fontSize: 14 },
+  addRowButtonText: { color: colors.textMuted, fontFamily: fonts.bodySemiBold, fontSize: fs(14) },
+  addRowButtonDisabled: { opacity: 0.4 },
   fieldLabel: {
     color: colors.textMuted,
     fontFamily: fonts.headingBold,
-    fontSize: 12,
+    fontSize: fs(12),
     letterSpacing: 1,
     marginBottom: 8,
   },
@@ -636,7 +659,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.card,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    fontSize: 15,
+    fontSize: fs(15),
     fontFamily: fonts.body,
     minHeight: 60,
     textAlignVertical: 'top',
@@ -652,31 +675,19 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
-  summaryText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 14 },
-  summaryKc: { color: colors.text, fontFamily: fonts.headingBold, fontSize: 18 },
+  summaryText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(14) },
+  summaryKc: { color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(18) },
   modalTitle: {
     color: colors.text,
     fontFamily: fonts.headingBold,
-    fontSize: 16,
+    fontSize: fs(16),
     letterSpacing: 1,
     marginBottom: 12,
   },
-  pickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  pickerRowName: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: 15, flex: 1 },
-  pickerRowRate: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12 },
   cancelButton: { height: 44, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
-  cancelButtonText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 15 },
-  addRowButtonDisabled: { opacity: 0.4 },
   travelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 17, marginBottom: 4 },
   travelLine: { width: 2, height: 16, backgroundColor: colors.accent, borderStyle: 'dashed', borderWidth: 1, borderColor: colors.accent },
-  travelText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 11 },
+  travelText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(11) },
   visitRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -695,16 +706,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  visitBadgeText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: 12 },
+  visitBadgeText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(12) },
   // Soukromá místa (domov...) - tlumeně, ikona domku místo čísla (A4).
   visitRowPrivate: { opacity: 0.6 },
   visitBadgePrivate: { backgroundColor: colors.border },
   visitBadgeTextPrivate: { color: colors.textMuted },
   textPrivate: { color: colors.textMuted },
-  uncertainText: { color: colors.danger, fontFamily: fonts.bodySemiBold, fontSize: 11, marginTop: 2 },
-  visitDuration: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12 },
-  saveAsPlaceLink: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: 11, marginTop: 2 },
-  suggestionHint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, marginBottom: 12 },
+  uncertainText: { color: colors.danger, fontFamily: fonts.bodySemiBold, fontSize: fs(11), marginTop: 2 },
+  visitDuration: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12) },
+  saveAsPlaceLink: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: fs(11), marginTop: 2 },
   timeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
   timeInput: {
     borderWidth: 1,
@@ -713,14 +723,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     width: 140,
-    fontSize: 16,
+    fontSize: fs(16),
     fontFamily: fonts.body,
     color: colors.text,
     backgroundColor: colors.background,
     textAlign: 'center',
   },
   modalButtons: { flexDirection: 'row', gap: 12, marginTop: 20 },
-  deleteVisitText: { color: colors.danger, fontFamily: fonts.body, fontSize: 15 },
+  deleteVisitText: { color: colors.danger, fontFamily: fonts.body, fontSize: fs(15) },
   saveButton: {
     flex: 1,
     height: 44,
@@ -729,5 +739,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  saveButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: 15, letterSpacing: 1 },
+  saveButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(15), letterSpacing: 1 },
 });

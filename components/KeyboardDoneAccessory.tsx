@@ -8,7 +8,7 @@
 
 import { InputAccessoryView, Keyboard, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import { colors, fonts, MIN_TOUCH } from '@/theme';
+import { colors, fonts, MIN_TOUCH, fs } from '@/theme';
 
 export const KEYBOARD_ACCESSORY_ID = 'dochazka-keyboard-done';
 
@@ -41,5 +41,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 8,
   },
-  buttonText: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: 15, letterSpacing: 0.5 },
+  buttonText: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: fs(15), letterSpacing: 0.5 },
 });

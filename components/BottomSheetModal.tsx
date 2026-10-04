@@ -8,9 +8,15 @@
 // `TouchableWithoutFeedback` (celá plocha) + vnitřní (karta, prázdný
 // onPress) zavřou klávesnici klepnutím mimo kartu, aniž by to počítalo
 // jako klik NA kartu - standardní RN vzor.
+//
+// OPRAVA 2 (C3) - klepnutí kamkoliv do karty mimo pole teď klávesnici
+// ZAVŘE (dřív vnitřní onPress nedělal nic, takže z pole ceny nešlo
+// odejít jinak než lištou HOTOVO). Pole hodnotu uloží při ztrátě
+// fokusu (onBlur). Klepnutí mimo kartu při otevřené klávesnici zavře
+// jen klávesnici, ne celé okno - rozepsaná hodnota se tak neztratí.
 
 import type { ReactNode } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, StyleSheet, TouchableWithoutFeedback, View } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, Modal, Platform, StyleSheet, TouchableWithoutFeedback, View } from 'react-native';
 
 import { colors } from '@/theme';
 
@@ -23,13 +29,16 @@ interface BottomSheetModalProps {
 export default function BottomSheetModal({ visible, onClose, children }: BottomSheetModalProps) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <TouchableWithoutFeedback onPress={onClose} accessible={false}>
+      <TouchableWithoutFeedback
+        onPress={() => (Keyboard.isVisible() ? Keyboard.dismiss() : onClose())}
+        accessible={false}
+      >
         <View style={styles.overlay}>
           <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             style={styles.avoider}
           >
-            <TouchableWithoutFeedback onPress={() => {}} accessible={false}>
+            <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
               <View style={styles.card}>{children}</View>
             </TouchableWithoutFeedback>
           </KeyboardAvoidingView>

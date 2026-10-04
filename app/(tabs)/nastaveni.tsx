@@ -7,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 
 import SettingsRow from '@/components/SettingsRow';
-import { colors, fonts } from '@/theme';
+import { colors, fonts, fs } from '@/theme';
 
 export default function SettingsHubScreen() {
   return (
@@ -55,7 +55,7 @@ const styles = StyleSheet.create({
   screenTitle: {
     color: colors.text,
     fontFamily: fonts.headingBold,
-    fontSize: 20,
+    fontSize: fs(20),
     letterSpacing: 1,
     marginTop: 8,
     marginBottom: 16,

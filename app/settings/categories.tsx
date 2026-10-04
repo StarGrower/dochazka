@@ -2,9 +2,14 @@
 // app/(tabs)/nastaveni.tsx, + ČÁST 1 oprava klávesnice přes
 // BottomSheetModal/KeyboardDoneAccessory, + ČÁST 2 vlastní barva přes
 // ColorPicker, + nové pole "kind" (typ stroj/práce).
+//
+// Oprava 2: sazby Kč/h, Kč/den a Kč/km zároveň, jedna výchozí (C1);
+// vlastní příplatek za víkend/svátek - prázdné pole = výchozí z
+// Nastavení -> Zápisy, 0 = bez příplatku (C2). Obsah panelu se roluje
+// (je delší než obrazovka) a klepnutí mimo pole zavře klávesnici (C3).
 
 import { useCallback, useState } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { SymbolView } from 'expo-symbols';
 import { useFocusEffect } from 'expo-router';
@@ -22,19 +27,36 @@ import {
   listCategories,
   updateCategory,
 } from '@/lib/db';
-import { formatKc } from '@/lib/format';
-import { tapHaptic } from '@/lib/haptics';
-import type { CategoryKind, RateType, WorkCategory } from '@/lib/types';
-import { categoryPalette, colors, fonts, paletteColorAt, radii, MIN_TOUCH } from '@/theme';
+import { formatKc, formatNumberCs, UNIT_RATE_LABEL } from '@/lib/format';
+import type { AppSettings, CategoryKind, RateUnit, WorkCategory } from '@/lib/types';
+import { DEFAULT_SETTINGS } from '@/lib/types';
+import { categoryPalette, colors, fonts, paletteColorAt, radii, MIN_TOUCH, fs } from '@/theme';
 
 type EditingState = {
   id: number | null;
   name: string;
-  rateType: RateType;
-  rateKc: number;
+  rates: Record<RateUnit, number>;
+  defaultUnit: RateUnit;
+  // Textová pole příplatků: '' = výchozí z Nastavení (null v DB).
+  weekendDraft: string;
+  holidayDraft: string;
   color: string;
   kind: CategoryKind;
 };
+
+const UNITS: RateUnit[] = ['hour', 'day', 'km'];
+const UNIT_LONG: Record<RateUnit, string> = { hour: 'Kč / hodinu', day: 'Kč / den', km: 'Kč / km' };
+
+function pctToDraft(pct: number | null): string {
+  return pct === null ? '' : formatNumberCs(pct);
+}
+
+// '' -> null (výchozí); neplatné číslo -> undefined (chyba).
+function draftToPct(draft: string): number | null | undefined {
+  if (draft.trim() === '') return null;
+  const value = Number(draft.replace(',', '.'));
+  return Number.isNaN(value) || value < 0 ? undefined : value;
+}
 
 // Krok 10 Kč - sazby se obvykle zadávají v desítkách/stovkách, ne po
 // 0,25 jako hodiny (viz zadání ČÁST 3 bod 3 - "stejné ovládání",
@@ -42,7 +64,23 @@ type EditingState = {
 const RATE_STEP_KC = 10;
 
 function emptyEditing(): EditingState {
-  return { id: null, name: '', rateType: 'hourly', rateKc: 0, color: paletteColorAt(0), kind: 'machine' };
+  return {
+    id: null,
+    name: '',
+    rates: { hour: 0, day: 0, km: 0 },
+    defaultUnit: 'hour',
+    weekendDraft: '',
+    holidayDraft: '',
+    color: paletteColorAt(0),
+    kind: 'machine',
+  };
+}
+
+// "850 Kč/h · 12 Kč/km" - výchozí sazba první, nulové vynechat.
+function ratesSummary(c: WorkCategory): string {
+  const ordered = [c.defaultUnit, ...UNITS.filter((u) => u !== c.defaultUnit)];
+  const parts = ordered.filter((u) => u === c.defaultUnit || c.rates[u] > 0).map((u) => `${formatKc(c.rates[u])}/${UNIT_RATE_LABEL[u].split('/')[1]}`);
+  return parts.join(' · ');
 }
 
 export default function CategoriesSettingsScreen() {
@@ -50,13 +88,13 @@ export default function CategoriesSettingsScreen() {
   const [recentColors, setRecentColors] = useState<string[]>([]);
   const [editing, setEditing] = useState<EditingState | null>(null);
   const [saving, setSaving] = useState(false);
-  const [hapticsEnabled, setHapticsEnabled] = useState(true);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
 
   const load = useCallback(async () => {
-    const [cats, settings] = await Promise.all([listCategories(), getSettings()]);
+    const [cats, s] = await Promise.all([listCategories(), getSettings()]);
     setCategories(cats);
-    setRecentColors(settings.recentCustomColors);
-    setHapticsEnabled(settings.hapticsEnabled);
+    setRecentColors(s.recentCustomColors);
+    setSettings(s);
   }, []);
 
   // useCallback je NUTNÝ - bez něj se `load` spustí po každém
@@ -69,7 +107,16 @@ export default function CategoriesSettingsScreen() {
 
   const openAdd = () => setEditing(emptyEditing());
   const openEdit = (c: WorkCategory) =>
-    setEditing({ id: c.id, name: c.name, rateType: c.rateType, rateKc: c.rateKc, color: c.color, kind: c.kind });
+    setEditing({
+      id: c.id,
+      name: c.name,
+      rates: { ...c.rates },
+      defaultUnit: c.defaultUnit,
+      weekendDraft: pctToDraft(c.weekendPct),
+      holidayDraft: pctToDraft(c.holidayPct),
+      color: c.color,
+      kind: c.kind,
+    });
 
   const handleSave = async () => {
     if (!editing) return;
@@ -82,23 +129,31 @@ export default function CategoriesSettingsScreen() {
       Alert.alert('Neplatná barva', 'Zadej platný hex kód barvy.');
       return;
     }
+    const weekendPct = draftToPct(editing.weekendDraft);
+    const holidayPct = draftToPct(editing.holidayDraft);
+    if (weekendPct === undefined || holidayPct === undefined) {
+      Alert.alert('Neplatný příplatek', 'Příplatek zadej jako číslo v %, nebo pole nech prázdné (= výchozí).');
+      return;
+    }
     setSaving(true);
     try {
+      const fields = {
+        name,
+        rates: editing.rates,
+        defaultUnit: editing.defaultUnit,
+        weekendPct,
+        holidayPct,
+        color: editing.color,
+        kind: editing.kind,
+      };
       if (editing.id === null) {
-        await createCategory(name, editing.rateType, editing.rateKc, editing.color, editing.kind);
+        await createCategory(fields);
       } else {
-        await updateCategory(editing.id, {
-          name,
-          rateType: editing.rateType,
-          rateKc: editing.rateKc,
-          color: editing.color,
-          kind: editing.kind,
-        });
+        await updateCategory(editing.id, fields);
       }
       if (!(categoryPalette as readonly string[]).includes(editing.color)) {
         await addRecentCustomColor(editing.color);
       }
-      tapHaptic(hapticsEnabled);
       setEditing(null);
       await load();
     } finally {
@@ -116,7 +171,6 @@ export default function CategoriesSettingsScreen() {
           text: 'Smazat',
           style: 'destructive',
           onPress: async () => {
-            tapHaptic(hapticsEnabled);
             await deleteCategory(c.id);
             await load();
           },
@@ -143,9 +197,7 @@ export default function CategoriesSettingsScreen() {
             />
             <View style={styles.rowMain}>
               <Text style={styles.rowName}>{item.name}</Text>
-              <Text style={styles.rowRate}>
-                {formatKc(item.rateKc)} / {item.rateType === 'hourly' ? 'hodinu' : 'den'}
-              </Text>
+              <Text style={styles.rowRate}>{ratesSummary(item)}</Text>
             </View>
             <Pressable hitSlop={12} onPress={() => handleDelete(item)}>
               <Text style={styles.deleteLabel}>Smazat</Text>
@@ -160,6 +212,7 @@ export default function CategoriesSettingsScreen() {
       </TouchableOpacity>
 
       <BottomSheetModal visible={editing !== null} onClose={() => setEditing(null)}>
+        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <Text style={styles.modalTitle}>{editing?.id === null ? 'NOVÁ KATEGORIE / STROJ' : 'UPRAVIT'}</Text>
 
         <Text style={styles.fieldLabel}>Název</Text>
@@ -186,27 +239,44 @@ export default function CategoriesSettingsScreen() {
           />
         </View>
 
-        <Text style={styles.fieldLabel}>Sazba</Text>
-        <View style={styles.segmentRow}>
-          <SegmentButton
-            label="Kč / hodinu"
-            active={editing?.rateType === 'hourly'}
-            onPress={() => setEditing((e) => (e ? { ...e, rateType: 'hourly' } : e))}
-          />
-          <SegmentButton
-            label="Kč / den"
-            active={editing?.rateType === 'daily'}
-            onPress={() => setEditing((e) => (e ? { ...e, rateType: 'daily' } : e))}
-          />
-        </View>
+        <Text style={styles.fieldLabel}>Sazby (výchozí jednotku vyber klepnutím vlevo)</Text>
+        {editing &&
+          UNITS.map((u) => (
+            <View key={u} style={styles.rateRow}>
+              <TouchableOpacity
+                style={[styles.defaultUnitButton, editing.defaultUnit === u && styles.defaultUnitButtonActive]}
+                onPress={() => setEditing((e) => (e ? { ...e, defaultUnit: u } : e))}
+              >
+                <Text style={[styles.defaultUnitText, editing.defaultUnit === u && styles.defaultUnitTextActive]}>
+                  {UNIT_LONG[u]}
+                </Text>
+                {editing.defaultUnit === u && <Text style={styles.defaultUnitBadge}>VÝCHOZÍ</Text>}
+              </TouchableOpacity>
+              <NumPad
+                value={editing.rates[u]}
+                step={u === 'km' ? 1 : RATE_STEP_KC}
+                unitLabel="Kč"
+                onChange={(next) => setEditing((e) => (e ? { ...e, rates: { ...e.rates, [u]: next } } : e))}
+              />
+            </View>
+          ))}
+
+        <Text style={styles.fieldLabel}>Příplatky (prázdné = výchozí, 0 = bez příplatku)</Text>
         {editing && (
-          <NumPad
-            value={editing.rateKc}
-            step={RATE_STEP_KC}
-            unitLabel="Kč"
-            onChange={(next) => setEditing((e) => (e ? { ...e, rateKc: next } : e))}
-            hapticsEnabled={hapticsEnabled}
-          />
+          <>
+            <SurchargeRow
+              label="Víkend"
+              draft={editing.weekendDraft}
+              defaultPct={settings.weekendSurchargePct}
+              onChange={(t) => setEditing((e) => (e ? { ...e, weekendDraft: t } : e))}
+            />
+            <SurchargeRow
+              label="Svátek"
+              draft={editing.holidayDraft}
+              defaultPct={settings.holidaySurchargePct}
+              onChange={(t) => setEditing((e) => (e ? { ...e, holidayDraft: t } : e))}
+            />
+          </>
         )}
 
         <Text style={styles.fieldLabel}>Barva</Text>
@@ -226,8 +296,43 @@ export default function CategoriesSettingsScreen() {
             <Text style={styles.saveButtonText}>{saving ? 'UKLÁDÁM...' : 'ULOŽIT'}</Text>
           </TouchableOpacity>
         </View>
+        </ScrollView>
       </BottomSheetModal>
     </SafeAreaView>
+  );
+}
+
+// "Víkend: výchozí (25 %)" / "Víkend: 40 % (vlastní)" (zadání C2).
+function SurchargeRow({
+  label,
+  draft,
+  defaultPct,
+  onChange,
+}: {
+  label: string;
+  draft: string;
+  defaultPct: number;
+  onChange: (text: string) => void;
+}) {
+  const custom = draft.trim() !== '';
+  return (
+    <View style={styles.rateRow}>
+      <Text style={styles.surchargeLabel}>
+        {label}: {custom ? `${draft} % (vlastní)` : `výchozí (${formatNumberCs(defaultPct)} %)`}
+      </Text>
+      <View style={styles.surchargeInputRow}>
+        <TextInput
+          style={styles.surchargeInput}
+          value={draft}
+          onChangeText={onChange}
+          placeholder={formatNumberCs(defaultPct)}
+          placeholderTextColor={colors.textMuted}
+          keyboardType="decimal-pad"
+          inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+        />
+        <Text style={styles.surchargeUnit}>%</Text>
+      </View>
+    </View>
   );
 }
 
@@ -254,9 +359,9 @@ const styles = StyleSheet.create({
   },
   colorSwatch: { width: 16, height: 16, borderRadius: 4 },
   rowMain: { flex: 1 },
-  rowName: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: 15 },
-  rowRate: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, marginTop: 2 },
-  deleteLabel: { color: colors.danger, fontFamily: fonts.bodySemiBold, fontSize: 13 },
+  rowName: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(15) },
+  rowRate: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginTop: 2 },
+  deleteLabel: { color: colors.danger, fontFamily: fonts.bodySemiBold, fontSize: fs(13) },
   empty: { color: colors.textMuted, textAlign: 'center', fontFamily: fonts.body, marginTop: 24 },
   addButton: {
     height: 54,
@@ -267,27 +372,56 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  addButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: 15, letterSpacing: 1 },
+  addButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(15), letterSpacing: 1 },
   modalTitle: {
     color: colors.text,
     fontFamily: fonts.headingBold,
-    fontSize: 17,
+    fontSize: fs(17),
     letterSpacing: 1,
     marginBottom: 16,
   },
-  fieldLabel: { color: colors.textMuted, fontFamily: fonts.bodySemiBold, fontSize: 12, marginBottom: 6, marginTop: 10 },
+  fieldLabel: { color: colors.textMuted, fontFamily: fonts.bodySemiBold, fontSize: fs(12), marginBottom: 6, marginTop: 10 },
   input: {
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radii.card,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    fontSize: 16,
+    fontSize: fs(16),
     fontFamily: fonts.body,
     color: colors.text,
     backgroundColor: colors.background,
   },
   segmentRow: { flexDirection: 'row', gap: 8, marginBottom: 4 },
+  rateRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 },
+  defaultUnitButton: {
+    flex: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: radii.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  defaultUnitButtonActive: { borderColor: colors.accent },
+  defaultUnitText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(13) },
+  defaultUnitTextActive: { color: colors.text, fontFamily: fonts.bodySemiBold },
+  defaultUnitBadge: { color: colors.accent, fontFamily: fonts.headingBold, fontSize: fs(9), letterSpacing: 1, marginTop: 2 },
+  surchargeLabel: { color: colors.text, fontFamily: fonts.body, fontSize: fs(13), flex: 1 },
+  surchargeInputRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  surchargeInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.card,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    width: 64,
+    fontSize: fs(16),
+    fontFamily: fonts.body,
+    color: colors.text,
+    backgroundColor: colors.background,
+    textAlign: 'center',
+  },
+  surchargeUnit: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(13) },
   segmentButton: {
     flex: 1,
     paddingVertical: 10,
@@ -297,11 +431,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   segmentButtonActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  segmentButtonText: { color: colors.text, fontFamily: fonts.body, fontSize: 14 },
+  segmentButtonText: { color: colors.text, fontFamily: fonts.body, fontSize: fs(14) },
   segmentButtonTextActive: { color: colors.onAccent, fontFamily: fonts.bodySemiBold },
   modalButtons: { flexDirection: 'row', gap: 12, marginTop: 24 },
   cancelButton: { flex: 1, height: MIN_TOUCH, alignItems: 'center', justifyContent: 'center' },
-  cancelButtonText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 15 },
+  cancelButtonText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(15) },
   saveButton: {
     flex: 1,
     height: MIN_TOUCH,
@@ -310,5 +444,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  saveButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: 15, letterSpacing: 1 },
+  saveButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(15), letterSpacing: 1 },
 });

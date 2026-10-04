@@ -19,7 +19,7 @@ import ColorPickerLib, {
 
 import BottomSheetModal from './BottomSheetModal';
 import { KEYBOARD_ACCESSORY_ID } from './KeyboardDoneAccessory';
-import { categoryPalette, colors, fonts, radii, MIN_TOUCH } from '@/theme';
+import { categoryPalette, colors, fonts, radii, MIN_TOUCH, fs } from '@/theme';
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 
@@ -171,7 +171,7 @@ const styles = StyleSheet.create({
   subLabel: {
     color: colors.textMuted,
     fontFamily: fonts.bodySemiBold,
-    fontSize: 11,
+    fontSize: fs(11),
     letterSpacing: 0.5,
     marginTop: 14,
     marginBottom: 8,
@@ -189,11 +189,11 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   customButtonSwatch: { width: 24, height: 24, borderRadius: radii.card },
-  customButtonText: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: 13, letterSpacing: 0.5 },
+  customButtonText: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(13), letterSpacing: 0.5 },
   modalTitle: {
     color: colors.text,
     fontFamily: fonts.headingBold,
-    fontSize: 17,
+    fontSize: fs(17),
     letterSpacing: 1,
     marginBottom: 16,
   },
@@ -207,16 +207,16 @@ const styles = StyleSheet.create({
     borderRadius: radii.card,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    fontSize: 16,
+    fontSize: fs(16),
     fontFamily: fonts.body,
     color: colors.text,
     backgroundColor: colors.background,
   },
   hexInputError: { borderColor: colors.danger },
-  errorText: { color: colors.danger, fontFamily: fonts.body, fontSize: 12, marginTop: 6 },
+  errorText: { color: colors.danger, fontFamily: fonts.body, fontSize: fs(12), marginTop: 6 },
   modalButtons: { flexDirection: 'row', gap: 12, marginTop: 20 },
   cancelButton: { flex: 1, height: MIN_TOUCH, alignItems: 'center', justifyContent: 'center' },
-  cancelButtonText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 15 },
+  cancelButtonText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(15) },
   useButton: {
     flex: 1,
     height: MIN_TOUCH,
@@ -225,5 +225,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  useButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: 15, letterSpacing: 1 },
+  useButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(15), letterSpacing: 1 },
 });

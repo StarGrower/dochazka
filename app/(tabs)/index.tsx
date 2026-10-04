@@ -3,9 +3,8 @@
 // vlastní měsíční header (šipky + VERZÁLKOVÝ název měsíce), tři
 // souhrnné karty a velké tlačítko "+ ZAPSAT DNEŠEK".
 //
-// "najeto km" karta je zatím vždy 0 - přejezdy/km přibudou až v etapě 3
-// (záznam polohy), tahle karta je tu teď jen jako připravený rámeček
-// pro budoucí data, ne proto, že by něco počítala.
+// "najeto km" karta sčítá položky v km (oprava 2, C1 - km se do etapy 3
+// zadávají ručně u stroje; v etapě 3 se nabídnou z přejezdů).
 
 import { useCallback, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -16,7 +15,7 @@ import MonthGrid from '@/components/MonthGrid';
 import { getMonthSummary, getSettings } from '@/lib/db';
 import { formatHours, monthNameUpper, todayIso } from '@/lib/format';
 import type { MonthDaySummary } from '@/lib/types';
-import { colors, fonts, radii, MIN_TOUCH } from '@/theme';
+import { colors, fonts, radii, MIN_TOUCH, fs } from '@/theme';
 
 export default function CalendarScreen() {
   const today = todayIso();
@@ -49,12 +48,14 @@ export default function CalendarScreen() {
 
   const monthTotal = useMemo(() => {
     let hours = 0;
+    let km = 0;
     let workDays = 0;
     for (const key in summary) {
       hours += summary[key].hours;
+      km += summary[key].km;
       workDays += 1;
     }
-    return { hours, workDays };
+    return { hours, km, workDays };
   }, [summary]);
 
   const goToMonth = (delta: number) => {
@@ -82,7 +83,7 @@ export default function CalendarScreen() {
 
       <View style={styles.summaryRow}>
         <SummaryCard label="ODPRACOVÁNO" value={formatHours(monthTotal.hours)} accent />
-        <SummaryCard label="NAJETO KM" value="0 km" />
+        <SummaryCard label="NAJETO KM" value={`${Math.round(monthTotal.km)} km`} />
         <SummaryCard label="PRACOVNÍCH DNÍ" value={String(monthTotal.workDays)} />
       </View>
 
@@ -95,7 +96,8 @@ export default function CalendarScreen() {
         startOnMonday={startOnMonday}
       />
 
-      <TouchableOpacity style={styles.ctaButton} onPress={() => router.push(`/day/${today}`)}>
+      {/* add=1: Detail dne rovnou otevře přidání položky (s návrhem výchozích položek, B2). */}
+      <TouchableOpacity style={styles.ctaButton} onPress={() => router.push(`/day/${today}?add=1`)}>
         <Text style={styles.ctaButtonText}>+ ZAPSAT DNEŠEK</Text>
       </TouchableOpacity>
       </ScrollView>
@@ -129,10 +131,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  monthArrowText: { color: colors.text, fontSize: 22, fontFamily: fonts.body, marginTop: -2 },
+  monthArrowText: { color: colors.text, fontSize: fs(22), fontFamily: fonts.body, marginTop: -2 },
   monthTitleBlock: { alignItems: 'center' },
-  monthTitle: { color: colors.text, fontFamily: fonts.headingBold, fontSize: 22, letterSpacing: 1 },
-  monthYear: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 13, marginTop: 2 },
+  monthTitle: { color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(22), letterSpacing: 1 },
+  monthYear: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(13), marginTop: 2 },
   summaryRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
   summaryCard: {
     flex: 1,
@@ -142,12 +144,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     alignItems: 'center',
   },
-  summaryValue: { color: colors.text, fontFamily: fonts.headingBold, fontSize: 18 },
+  summaryValue: { color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(18) },
   summaryValueAccent: { color: colors.accent },
   summaryLabel: {
     color: colors.textMuted,
     fontFamily: fonts.bodySemiBold,
-    fontSize: 10,
+    fontSize: fs(10),
     marginTop: 4,
     textAlign: 'center',
   },
@@ -162,7 +164,7 @@ const styles = StyleSheet.create({
   ctaButtonText: {
     color: colors.onAccent,
     fontFamily: fonts.headingBold,
-    fontSize: 16,
+    fontSize: fs(16),
     letterSpacing: 1,
   },
 });

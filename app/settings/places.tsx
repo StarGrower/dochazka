@@ -10,7 +10,7 @@ import { deletePlace, listPlaces } from '@/lib/db';
 import { refreshGeofences } from '@/lib/locationTracking';
 import { rebuildRecentVisits } from '@/lib/visits';
 import type { Place } from '@/lib/types';
-import { colors, fonts, radii } from '@/theme';
+import { colors, fonts, radii, fs } from '@/theme';
 
 export default function PlacesSettingsScreen() {
   const [places, setPlaces] = useState<Place[]>([]);
@@ -99,14 +99,14 @@ const styles = StyleSheet.create({
   sectionHeader: {
     color: colors.textMuted,
     fontFamily: fonts.headingBold,
-    fontSize: 12,
+    fontSize: fs(12),
     letterSpacing: 1,
     marginTop: 8,
     marginBottom: 8,
   },
-  rowName: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: 15 },
-  rowDetail: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, marginTop: 2 },
-  deleteLabel: { color: colors.danger, fontFamily: fonts.bodySemiBold, fontSize: 13 },
+  rowName: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(15) },
+  rowDetail: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginTop: 2 },
+  deleteLabel: { color: colors.danger, fontFamily: fonts.bodySemiBold, fontSize: fs(13) },
   empty: { color: colors.textMuted, textAlign: 'center', fontFamily: fonts.body, marginTop: 24 },
   addButton: {
     height: 54,
@@ -117,5 +117,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  addButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: 15, letterSpacing: 1 },
+  addButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(15), letterSpacing: 1 },
 });

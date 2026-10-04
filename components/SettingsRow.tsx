@@ -4,7 +4,7 @@
 import { SymbolView, type SFSymbol } from 'expo-symbols';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import { colors, fonts, radii, MIN_TOUCH } from '@/theme';
+import { colors, fonts, radii, MIN_TOUCH, fs } from '@/theme';
 
 interface SettingsRowProps {
   icon: SFSymbol;
@@ -48,7 +48,7 @@ const styles = StyleSheet.create({
   rowDisabled: { opacity: 0.5 },
   iconWrap: { width: 32, alignItems: 'center' },
   textBlock: { flex: 1 },
-  title: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: 15 },
-  description: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, marginTop: 2 },
-  chevron: { color: colors.textMuted, fontSize: 20, fontFamily: fonts.body },
+  title: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(15) },
+  description: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginTop: 2 },
+  chevron: { color: colors.textMuted, fontSize: fs(20), fontFamily: fonts.body },
 });

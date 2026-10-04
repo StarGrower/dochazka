@@ -4,6 +4,8 @@
 // "userInterfaceStyle": "dark") - žádné světlé varianty barev tu proto
 // nejsou, na rozdíl od dřívějšího components/Themed.tsx (smazáno).
 
+import Storage from 'expo-sqlite/kv-store';
+
 export const colors = {
   background: '#131311',
   card: '#1E1E1B',
@@ -47,3 +49,29 @@ export const radii = {
 
 // Minimální dotyková plocha (iOS HIG) - viz zadání "dotykové plochy min. 44 px".
 export const MIN_TOUCH = 44;
+
+// --- velikost písma (oprava 2, E) ---
+//
+// NETRIVIÁLNÍ ROZHODNUTÍ - styly vznikají při načtení modulů
+// (StyleSheet.create), takže měřítko musí být známé DŘÍV, než se
+// načte jakákoliv obrazovka: čte se synchronně z expo-sqlite/kv-store
+// (Nastavení -> Aplikace ho tam zapíše zároveň s hlavní DB) a po
+// přepnutí se appka znovu načte (reloadAppAsync). Všechny velikosti
+// písma v appce jdou přes `fs()`.
+
+export const FONT_SCALE_STORAGE_KEY = 'dochazka.fontScale';
+const LARGE_FONT_SCALE = 1.18;
+
+function readFontScale(): number {
+  try {
+    return Storage.getItemSync(FONT_SCALE_STORAGE_KEY) === 'large' ? LARGE_FONT_SCALE : 1;
+  } catch {
+    return 1;
+  }
+}
+
+const fontScaleFactor = readFontScale();
+
+export function fs(size: number): number {
+  return Math.round(size * fontScaleFactor * 2) / 2;
+}

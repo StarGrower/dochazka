@@ -2,7 +2,7 @@
 
 import { StyleSheet, Switch, Text, View } from 'react-native';
 
-import { colors, fonts, radii } from '@/theme';
+import { colors, fonts, radii, fs } from '@/theme';
 
 interface ToggleRowProps {
   label: string;
@@ -43,6 +43,6 @@ const styles = StyleSheet.create({
   },
   rowDisabled: { opacity: 0.5 },
   textBlock: { flex: 1, marginRight: 12 },
-  label: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: 15 },
-  description: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, marginTop: 2 },
+  label: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(15) },
+  description: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginTop: 2 },
 });

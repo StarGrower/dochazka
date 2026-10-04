@@ -9,8 +9,7 @@ import { useEffect, useState } from 'react';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import { KEYBOARD_ACCESSORY_ID } from './KeyboardDoneAccessory';
-import { tapHaptic } from '@/lib/haptics';
-import { colors, fonts, radii } from '@/theme';
+import { colors, fonts, radii, fs } from '@/theme';
 
 interface NumPadProps {
   value: number;
@@ -18,10 +17,9 @@ interface NumPadProps {
   unitLabel: string;
   onChange: (next: number) => void;
   roundTypedValue?: (value: number) => number;
-  hapticsEnabled?: boolean;
 }
 
-export default function NumPad({ value, step, unitLabel, onChange, roundTypedValue, hapticsEnabled }: NumPadProps) {
+export default function NumPad({ value, step, unitLabel, onChange, roundTypedValue }: NumPadProps) {
   const [draft, setDraft] = useState(String(value));
 
   useEffect(() => {
@@ -33,7 +31,6 @@ export default function NumPad({ value, step, unitLabel, onChange, roundTypedVal
   }, [value]);
 
   const handleStep = (delta: number) => {
-    tapHaptic(!!hapticsEnabled);
     const next = Math.max(0, Math.round((value + delta) * 100) / 100);
     onChange(next);
   };
@@ -81,7 +78,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  stepButtonText: { color: colors.text, fontSize: 18, fontFamily: fonts.body, marginTop: -2 },
+  stepButtonText: { color: colors.text, fontSize: fs(18), fontFamily: fonts.body, marginTop: -2 },
   valueBox: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   input: {
     borderWidth: 1,
@@ -90,11 +87,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 6,
     width: 56,
-    fontSize: 16,
+    fontSize: fs(16),
     fontFamily: fonts.body,
     color: colors.text,
     backgroundColor: colors.background,
     textAlign: 'center',
   },
-  unit: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 13 },
+  unit: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(13) },
 });

@@ -1,6 +1,7 @@
 // Nastavení -> Aplikace -> Ladicí deník (ČÁST B bod 9) - pro testování
 // v terénu: seznam událostí záznamu polohy s časem a stavem baterie,
-// export do souboru pro poslání.
+// export do souboru pro poslání. Oprava 2 (F1): u souřadnic nejbližší
+// obec ("50.1,14.4 · u Prahy") - dohledá se až tady, ne při záznamu.
 
 import { useCallback, useState } from 'react';
 import { Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -11,8 +12,9 @@ import { useFocusEffect } from 'expo-router';
 
 import ScreenHeader from '@/components/ScreenHeader';
 import { clearDebugLog, listDebugLog } from '@/lib/db';
+import { geocodeKey, nearLocalityLabel, resolveLocalities } from '@/lib/geocode';
 import type { DebugLogEntry } from '@/lib/types';
-import { colors, fonts, radii } from '@/theme';
+import { colors, fonts, radii, fs } from '@/theme';
 
 const EVENT_LABELS: Record<DebugLogEntry['eventType'], string> = {
   arrival: 'PŘÍJEZD',
@@ -33,10 +35,25 @@ function formatTimestamp(iso: string): string {
 
 export default function DebugLogScreen() {
   const [entries, setEntries] = useState<DebugLogEntry[]>([]);
+  const [localities, setLocalities] = useState<Map<string, string>>(new Map());
+
+  const withCoords = (list: DebugLogEntry[]) =>
+    list.flatMap((e) => (e.latitude !== null && e.longitude !== null ? [{ latitude: e.latitude, longitude: e.longitude }] : []));
 
   const load = useCallback(async () => {
-    setEntries(await listDebugLog());
+    const list = await listDebugLog();
+    setEntries(list);
+    // Obce se doplní dodatečně - seznam se ukáže hned, bez čekání na síť.
+    resolveLocalities(withCoords(list))
+      .then(setLocalities)
+      .catch(() => {});
   }, []);
+
+  const localityOf = (e: DebugLogEntry, map: Map<string, string>): string => {
+    if (e.latitude === null || e.longitude === null) return '';
+    const name = map.get(geocodeKey(e.latitude, e.longitude));
+    return name ? ` · ${nearLocalityLabel(name)}` : '';
+  };
 
   // useCallback je NUTNÝ - bez něj se `load` spustí po každém
   // překreslení a přepíše rozepsané hodnoty v polích (oprava 2).
@@ -47,9 +64,13 @@ export default function DebugLogScreen() {
   );
 
   const handleExport = async () => {
+    const names = await resolveLocalities(withCoords(entries)).catch(() => localities);
     const lines = entries.map((e) => {
       const battery = e.batteryLevel !== null ? `${Math.round(e.batteryLevel * 100)}%` : '-';
-      const coords = e.latitude !== null && e.longitude !== null ? `${e.latitude.toFixed(5)},${e.longitude.toFixed(5)}` : '-';
+      const coords =
+        e.latitude !== null && e.longitude !== null
+          ? `${e.latitude.toFixed(5)},${e.longitude.toFixed(5)}${localityOf(e, names)}`
+          : '-';
       const delivered = e.deliveredAt
         ? `\tdoručeno ${e.deliveredAt}, baterie ${e.deliveredBattery !== null ? `${Math.round(e.deliveredBattery * 100)}%` : '-'}`
         : '';
@@ -109,6 +130,7 @@ export default function DebugLogScreen() {
             <Text style={styles.meta}>
               baterie {item.batteryLevel !== null ? `${Math.round(item.batteryLevel * 100)}%` : '-'}
               {item.latitude !== null ? ` · ${item.latitude.toFixed(4)}, ${item.longitude?.toFixed(4)}` : ''}
+              {localityOf(item, localities)}
             </Text>
             {item.deliveredAt && (
               <Text style={styles.meta}>
@@ -135,7 +157,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: 13, letterSpacing: 1 },
+  actionButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(13), letterSpacing: 1 },
   actionButtonDanger: {
     flex: 1,
     height: 44,
@@ -145,7 +167,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionButtonDangerText: { color: colors.danger, fontFamily: fonts.headingBold, fontSize: 13, letterSpacing: 1 },
+  actionButtonDangerText: { color: colors.danger, fontFamily: fonts.headingBold, fontSize: fs(13), letterSpacing: 1 },
   listContent: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24 },
   row: {
     backgroundColor: colors.card,
@@ -154,9 +176,9 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   rowHeader: { flexDirection: 'row', justifyContent: 'space-between' },
-  eventType: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: 12, letterSpacing: 0.5 },
-  timestamp: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 11 },
-  detail: { color: colors.text, fontFamily: fonts.body, fontSize: 13, marginTop: 4 },
-  meta: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 11, marginTop: 4 },
+  eventType: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: fs(12), letterSpacing: 0.5 },
+  timestamp: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(11) },
+  detail: { color: colors.text, fontFamily: fonts.body, fontSize: fs(13), marginTop: 4 },
+  meta: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(11), marginTop: 4 },
   empty: { color: colors.textMuted, textAlign: 'center', fontFamily: fonts.body, marginTop: 24 },
 });

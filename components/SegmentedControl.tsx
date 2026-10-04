@@ -3,7 +3,7 @@
 
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import { colors, fonts, radii } from '@/theme';
+import { colors, fonts, radii, fs } from '@/theme';
 
 interface SegmentedControlProps<T extends string | number> {
   label: string;
@@ -51,7 +51,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   wrapDisabled: { opacity: 0.5 },
-  label: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: 15, marginBottom: 10 },
+  label: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(15), marginBottom: 10 },
   row: { flexDirection: 'row', gap: 8 },
   button: {
     flex: 1,
@@ -62,6 +62,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   buttonActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  buttonText: { color: colors.text, fontFamily: fonts.body, fontSize: 13 },
+  buttonText: { color: colors.text, fontFamily: fonts.body, fontSize: fs(13) },
   buttonTextActive: { color: colors.onAccent, fontFamily: fonts.bodySemiBold },
 });

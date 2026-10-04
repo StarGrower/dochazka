@@ -6,7 +6,7 @@
 import { SymbolView } from 'expo-symbols';
 import { Tabs } from 'expo-router';
 
-import { colors, fonts } from '@/theme';
+import { colors, fonts, fs } from '@/theme';
 
 export default function TabLayout() {
   return (
@@ -21,7 +21,7 @@ export default function TabLayout() {
         },
         tabBarLabelStyle: {
           fontFamily: fonts.bodySemiBold,
-          fontSize: 11,
+          fontSize: fs(11),
         },
       }}>
       <Tabs.Screen

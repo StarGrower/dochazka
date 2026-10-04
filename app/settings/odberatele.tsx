@@ -6,7 +6,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import ScreenHeader from '@/components/ScreenHeader';
-import { colors, fonts, radii } from '@/theme';
+import { colors, fonts, radii, fs } from '@/theme';
 
 export default function OdberateleSettingsScreen() {
   return (
@@ -36,5 +36,5 @@ const styles = StyleSheet.create({
     borderRadius: radii.card,
     padding: 14,
   },
-  bannerText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, lineHeight: 17 },
+  bannerText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), lineHeight: 17 },
 });

@@ -2,6 +2,8 @@
 // knihovna (date-fns/dayjs) - na tenhle rozsah stačí Intl a pár
 // jednořádkových funkcí.
 
+import type { RateUnit } from './types';
+
 const MONTHS_CS = [
   'Leden', 'Únor', 'Březen', 'Duben', 'Květen', 'Červen',
   'Červenec', 'Srpen', 'Září', 'Říjen', 'Listopad', 'Prosinec',
@@ -74,3 +76,23 @@ export function formatKc(amount: number): string {
   const rounded = Math.round(amount);
   return `${rounded.toLocaleString('cs-CZ')} Kč`;
 }
+
+// --- jednotky položek (oprava 2, C1) ---
+
+export function formatNumberCs(n: number): string {
+  return (Math.round(n * 100) / 100).toString().replace('.', ',');
+}
+
+// "8 h", "1 den", "2 dny", "5 dní", "0,5 dne", "120 km"
+export function formatQuantity(quantity: number, unit: RateUnit): string {
+  const n = formatNumberCs(quantity);
+  if (unit === 'hour') return `${n} h`;
+  if (unit === 'km') return `${n} km`;
+  if (!Number.isInteger(quantity)) return `${n} dne`;
+  if (quantity === 1) return '1 den';
+  if (quantity >= 2 && quantity <= 4) return `${n} dny`;
+  return `${n} dní`;
+}
+
+export const UNIT_SHORT: Record<RateUnit, string> = { hour: 'h', day: 'den', km: 'km' };
+export const UNIT_RATE_LABEL: Record<RateUnit, string> = { hour: 'Kč/h', day: 'Kč/den', km: 'Kč/km' };
