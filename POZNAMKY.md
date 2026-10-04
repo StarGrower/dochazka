@@ -12,7 +12,7 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Test v terénu proběhl 2.-4. 10. 2026.**
 **Oprava 2 (po terénním testu etapy 2) - HOTOVO (skupiny A-F), build OVĚŘEN (run 37210061504, 13m21s, všechny kroky zelené vč. Swift modulu, `.ipa` ~15 MB). Čeká na test v telefonu - viz "Co otestovat v telefonu (oprava 2)".**
 
-**Etapa 4 (záloha, stav záznamu, připomenutí, výkaz pro šéfa) - HOTOVO, viz sekce "Etapa 4" níž; čeká na build a test.**
+**Etapa 4 (záloha, stav záznamu, připomenutí, výkaz pro šéfa) - HOTOVO, build OVĚŘEN (run 37242592887, 16m52s, vše zelené vč. Swift modulu dochazka-native, `.ipa` ~15,8 MB). Čeká na test - viz "Etapa 4 - co testovat".**
 **Plán etap 4-8: `PLAN_DALSI_ETAPY.md` (jen lokálně, v `.gitignore`), grafické předlohy v `private/` (predloha-pripominka.html, predloha-zakazky.html).**
 **Etapa 3 (přejezdy, trasy, km, mapa) + ikona, logo a úvodní animace - HOTOVO, build OVĚŘEN (run 37218589500, 15m34s, vše zelené vč. react-native-maps a react-native-svg, `.ipa` ~15 MB). Čeká na test v terénu - viz "Etapa 3 - co testovat v terénu".**
 - Etapa 4 (export, záloha) - nezačato.
