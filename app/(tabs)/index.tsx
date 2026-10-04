@@ -39,9 +39,13 @@ export default function CalendarScreen() {
 
   // Znovu načíst při každém návratu na tenhle tab (např. po úpravě
   // hodin v detailu dne) - ne jen při změně měsíce.
-  useFocusEffect(() => {
-    load();
-  });
+  // useCallback je NUTNÝ - bez něj se `load` spustí po každém
+  // překreslení a přepíše rozepsané hodnoty v polích (oprava 2).
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   const monthTotal = useMemo(() => {
     let hours = 0;

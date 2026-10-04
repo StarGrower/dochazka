@@ -45,7 +45,9 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "test:engine": "tsc --ignoreConfig --ignoreDeprecations 6.0 --outDir node_modules/.cache/dochazka-tests --rootDir . --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --strict --types node scripts/test-visit-engine.ts && TZ=UTC node node_modules/.cache/dochazka-tests/scripts/test-visit-engine.js",
+    "test:replay": "tsc --ignoreConfig --ignoreDeprecations 6.0 --outDir node_modules/.cache/dochazka-tests --rootDir . --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --strict --types node private/replay-test.ts && TZ=Europe/Prague node node_modules/.cache/dochazka-tests/private/replay-test.js"
   },
   "private": true
 }

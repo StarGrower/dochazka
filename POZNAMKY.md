@@ -9,10 +9,147 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Vizuální styl "A · Stavba" - HOTOVO.**
 **Test na iPhonu, 3 části (klávesnice, barvy, přestavba Nastavení) - HOTOVO.**
 **Etapa 2, ČÁST A (GitHub + sestavení) - HOTOVO, první build na GitHubu OVĚŘEN (13m59s, všechny kroky zelené, `.ipa` 14,7 MB).**
-**Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Zbývá už jen test v terénu na skutečném zařízení.**
+**Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Test v terénu proběhl 2.-4. 10. 2026.**
+**Oprava 2 (po terénním testu etapy 2) - ROZPRACOVÁNO, viz sekce "Oprava 2" níž. Skupina A (poloha a pobyty) HOTOVO.**
 
 - Etapa 3 (přejezdy, mapa, km) - nezačato.
 - Etapa 4 (export, záloha) - nezačato.
+
+## Oprava 2 - po terénním testu etapy 2
+
+Zadání je v `ZADANI_OPRAVY_2.md` - **jen lokálně, v `.gitignore`**
+(obsahuje ladicí deník se souřadnicemi). Postup po skupinách A-F.
+
+### SOUKROMÍ - repozitář je veřejný
+
+- `.gitignore`: `ZADANI_OPRAVY*.md`, `private/`, `*.db*`, exporty
+  ladicího deníku. Do repozitáře NIKDY souřadnice, názvy míst, exporty
+  deníku ani zálohy databáze. Historie commitů zkontrolována (4. 10.) -
+  jediné souřadnice jsou obecný střed Prahy (výchozí bod mapy).
+- `private/` (lokálně): `denik-2026-10-04.txt` (deník z telefonu),
+  `replay-test.ts` (přehrání deníku, `npm run test:replay`),
+  `migration-test.ts` (migrace na napodobené staré DB přes `node:sqlite`,
+  `npx tsc -p private/tsconfig.test.json && TZ=Europe/Prague
+  TEST_DB_DIR=<dočasná složka> node private/run-migration-test.js`).
+- `scripts/test-visit-engine.ts` (v repu, `npm run test:engine`) má jen
+  SMYŠLENÉ souřadnice kolem 0,0.
+
+### Skupina A - poloha a pobyty (HOTOVO)
+
+**Příčiny chyb z deníku:**
+1. Duplicitní CLVisit (2-4×): Swift modul uložil událost do fronty
+   a zároveň ji poslal živě; JS ji zpracoval živě, ale z fronty se
+   nesmazala -> při dalším startu znovu. Baterie se četla až při
+   zpracování, proto různá % u téže události.
+2. Bouře geofence: `startGeofencingAsync` se volal při každém startu
+   appky i každé significant change; iOS po registraci hlásí stav všech
+   oblastí a to se bralo jako příjezd/odjezd.
+3. Časové okno podle času ZPRACOVÁNÍ; sobotní odjezd padl mimo okno
+   (Po-Pá) a zahodil se -> páteční pobyt zůstal otevřený 42 h.
+4. Probíhající pobyt v budoucích dnech: dotaz `end_at IS NULL` se
+   překrývá s jakýmkoliv dnem.
+5. Smíchané formáty času (CLVisit v UTC `...Z`, ruční úpravy v místním
+   čase bez zóny) + textové porovnání v SQL -> posun o 2 h.
+6. **`useFocusEffect(() => load())` bez `useCallback`** na 8 obrazovkách
+   -> `load` po KAŽDÉM překreslení: přepisoval rozepsaná pole (časové
+   okno, délka dne, poznámka "nejdou změnit") a souběžně vkládal výchozí
+   položky dne (Osobák 2×). Opraveno všude.
+
+**NETRIVIÁLNÍ ROZHODNUTÍ - pobyty se přepočítávají z událostí.**
+Nová tabulka `location_events` (každá událost JEDNOU - UNIQUE otisk:
+typ + čas události [+ místo/souřadnice]). Pobyty (`visits` se source
+clvisit/geofence/continuous) jsou odvozená data: po každé nové
+události se přepočítají od jejího času (`lib/visits.ts ->
+rebuildVisits`) čistou funkcí `lib/visitEngine.ts -> computeVisits`.
+Pořadí doručení tím nehraje roli. Trvalé jsou jen ruční zásahy:
+upravený pobyt -> `source = 'manual'` (přepočet ho nepřepíše, automatické
+se kolem něj oříznou; otevřený ruční pobyt uzavře začátek dalšího),
+smazaný -> `deleted_by = 'user'` (přepočet ho nevrátí). Přepočet sahá
+max. tam, kde začíná pobyt běžící přes čas nové události (+15 min);
+po změně místa / min. délky pobytu se přepočítají poslední 3 dny.
+Události se drží 60 dní. Vše, co mění události/pobyty, běží přes
+jednu frontu (`runExclusive`) - iOS doručuje víc událostí naráz.
+
+Pravidla v `computeVisits`:
+- hlavní zdroj CLVisit; geofence vstup = rychlejší příjezd (vstup do 5
+  min po CLVisit odjezdu ze stejného místa se ignoruje), geofence výstup
+  = záloha odjezdu (pozdější CLVisit odjezd ho zpřesní); significant
+  change > 1 km za hranicí místa = důkaz odjezdu
+- jen jeden otevřený pobyt; nový příjezd uzavře předchozí
+- duplicity (stejný typ + sekunda) se zahodí
+- CLVisit se k místu přiřadí i kus za poloměrem (tolerance +200 m -
+  souřadnice CLVisit jsou "těžiště" s přesností desítek-stovek m;
+  v deníku byl příjezd ~255 m od středu místa)
+- odjezd bez příjezdu (sledování začalo, když už jsem na místě byl) ->
+  pobyt s **neznámým začátkem** (`start_uncertain`, zobrazí se "?-20:23",
+  do návrhu hodin se nepočítá)
+- stejné místo do 15 min -> sloučit; krátké pobyty (< min. délky) pryč
+- dvě "neznámá místa" do 300 m = totéž místo
+
+**Nativní modul:** fronta je JEDINÁ cesta do JS - živá událost jen
+spustí `drainPendingEvents()`; fronta je za zámkem (`NSLock`), k
+události se přidává `receivedAt`.
+
+**Geofence:** registrace jen při změně sady míst (otisk v
+`settings` jako `internal.geofence_signature`), hlášení do 15 s po
+registraci se ignorují (v deníku "úvodní stav po registraci, ignorováno").
+
+**NETRIVIÁLNÍ ROZHODNUTÍ - časové okno už nefiltruje pobyty.**
+Vyhodnocuje se podle času události a určuje (1) kdy průběžný režim
+sbírá body (jinde se body vůbec nezapisují) a (2) jaká část pobytů se
+počítá do "NAVRHNOUT Z POBYTŮ" (jen pracovní a neznámá místa, jen úsek
+v tom dni, jen v okně a ve vybraných dnech). Příjezdy/odjezdy se
+zaznamenávají vždy - iOS je dodá stejně (baterie navíc 0) a zahozený
+odjezd mimo okno byl příčinou neuzavřených pobytů. Očekávaný výsledek
+rekonstrukce ze zadání (pátek 20:34, sobota, neděle) to ostatně
+předpokládá.
+
+**Ladicí deník:** zapisují se jen NOVÉ události (duplicity ne), čas =
+čas události; baterie k času události, u událostí doručených > 2 min
+později "· doručeno později" + čas a baterie doručení zvlášť
+(`debug_log.delivered_at/delivered_battery`).
+
+**Průběh dne** (`lib/dayTimeline.ts`): pobyt přes půlnoc jen v rozsahu
+dne (0:00 / 24:00), probíhající končí "teď" a v budoucích dnech se
+neukazuje, délka jen za daný den, přejezd jen mezi RŮZNÝMI místy.
+Probíhající > 24 h -> červené "Nejistý konec · Doplnit konec" (otevře
+úpravu pobytu). Úprava času mění čas v rámci PŮVODNÍHO dne začátku/
+konce (pobyt přes půlnoc jde upravit z kteréhokoliv dne), nezměněné
+pole zůstane přesně.
+
+**Místa - pracovní / soukromá** (`places.is_private`): domov je vždy
+soukromý (hlídá i `lib/db.ts`). Soukromá se nepočítají do návrhu hodin,
+v průběhu dne jsou tlumená s ikonou domku, v seznamu míst dvě skupiny.
+
+### Migrace v1 (`PRAGMA user_version` 0 -> 1)
+
+Číslované migrace přes `user_version` (`lib/db.ts ->
+runVersionedMigrations`), každá jednou. Před první čekající migrací na
+existující DB **záloha** `dochazka-zaloha-pred-opravami-2.db` (VACUUM
+INTO, vedle `dochazka.db`; existující záloha se nepřepisuje, výsledek v
+`settings.internal.backup_before_fixes_2`).
+
+v1: nové sloupce (`visits.start_uncertain/deleted_by`,
+`places.is_private` z `is_home`, `debug_log.delivered_at/
+delivered_battery`), tabulky `location_events` a `geocode_cache`, časy
+pobytů na UTC ISO, **přehrání CLVisit událostí z ladicího deníku** do
+`location_events` (duplicity zmizí otiskem), staré automatické pobyty
+z doby před deníkem -> umělé události příjezd/odjezd. Při startu pak
+`finishLegacyVisitMigrationIfNeeded()` (ještě před UI): staré
+automatické pobyty `is_deleted = 1, deleted_by = 'migration'`, nové z
+přepočtu všech událostí. Ruční pobyty se nemění.
+
+Ověřeno lokálně (`private/migration-test.ts`, napodobená DB s deníkem
+z telefonu a poškozenými pobyty) - výsledek přesně podle zadání:
+- Pá 2. 10.: místo #2 ?-20:23, přejezd 11 min, domov 20:34-24:00
+- So 3. 10.: domov 0:00-6:49, přejezd, neznámé místo 7:06-16:50,
+  přejezd, domov 17:08-24:00
+- Ne 4. 10.: domov 0:00-14:32, přejezd 11 min, místo #2 14:43-probíhá
+- záloha obsahuje všechna původní data, druhý start nic nezmění.
+
+Pozor: přiřazení příjezdu k místu #2 vyžaduje poloměr místa aspoň
+~60 m (CLVisit hlásil bod ~255 m od středu, tolerance je poloměr +
+200 m). Při poloměru 50 m by se ukázalo "Neznámé místo".
 
 ## DŮLEŽITÉ - co jsem NEMOHL ověřit sám (ČÁST B)
 

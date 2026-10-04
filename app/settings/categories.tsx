@@ -59,9 +59,13 @@ export default function CategoriesSettingsScreen() {
     setHapticsEnabled(settings.hapticsEnabled);
   }, []);
 
-  useFocusEffect(() => {
-    load();
-  });
+  // useCallback je NUTNÝ - bez něj se `load` spustí po každém
+  // překreslení a přepíše rozepsané hodnoty v polích (oprava 2).
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   const openAdd = () => setEditing(emptyEditing());
   const openEdit = (c: WorkCategory) =>

@@ -47,7 +47,10 @@ export interface Place {
   longitude: number;
   radiusM: number;
   orderLabel: string; // zakázka/odběratel - zatím jen text, viz PŘÍPRAVA NA FAKTURACI
-  isHome: boolean; // vyloučeno z "NAVRHNOUT Z POBYTŮ" (zadání "bez domova")
+  isHome: boolean; // domov - vždy zároveň soukromé místo
+  // Oprava 2, A4: soukromé místo (domov a podobně) se nepočítá do
+  // pracovní doby ani do "NAVRHNOUT Z POBYTŮ", v průběhu dne je tlumené.
+  isPrivate: boolean;
   isDeleted: boolean;
 }
 
@@ -64,13 +67,19 @@ export interface Visit {
   startAt: string; // ISO datetime
   endAt: string | null; // null = pobyt ještě neskončil (probíhá)
   source: VisitSource;
+  // Odjezd bez zachyceného příjezdu - začátek neznámý (startAt = endAt).
+  startUncertain: boolean;
   isDeleted: boolean;
+  // Kdo pobyt smazal: 'user' (ručně - při přepočtu se znovu neobjeví),
+  // 'migration' (nahrazeno přepočtem z událostí, oprava 2), null.
+  deletedBy: 'user' | 'migration' | null;
 }
 
 export interface VisitWithPlace extends Visit {
   placeName: string | null;
   placeRadiusM: number | null;
   placeIsHome: boolean;
+  placeIsPrivate: boolean;
 }
 
 export type DebugEventType =
@@ -89,9 +98,13 @@ export interface DebugLogEntry {
   timestamp: string; // ISO
   eventType: DebugEventType;
   detail: string;
-  batteryLevel: number | null; // 0-1
+  batteryLevel: number | null; // 0-1, v čase události (null u opožděně doručených)
   latitude: number | null;
   longitude: number | null;
+  // Opožděně doručená událost (iOS doručí CLVisit třeba až po hodinách):
+  // kdy a s jakou baterií appka událost skutečně dostala.
+  deliveredAt: string | null;
+  deliveredBattery: number | null;
 }
 
 export type LocationTrackingMode = 'economical' | 'continuous';

@@ -32,6 +32,7 @@
 
 import * as SQLite from 'expo-sqlite';
 import { paletteColorAt } from '@/theme';
+import { localDayBounds } from './dayTimeline';
 import type {
   AppSettings,
   CategoryKind,
@@ -46,6 +47,7 @@ import type {
   WorkCategory,
 } from './types';
 import { DEFAULT_SETTINGS } from './types';
+import type { EngineEvent, EngineVisitSource, LocationEventKind } from './visitEngine';
 
 const DB_NAME = 'dochazka.db';
 
@@ -76,6 +78,11 @@ async function seedDefaultCategories(db: SQLite.SQLiteDatabase): Promise<void> {
 
 export async function initDb(): Promise<void> {
   const db = await getDb();
+  // Byla už databáze z dřívější verze? (Rozhoduje, jestli má smysl před
+  // migracemi dělat zálohu - čerstvá instalace nemá co zálohovat.)
+  const existing = await db.getFirstAsync<{ name: string }>(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'work_categories'"
+  );
   await db.execAsync(`
     PRAGMA journal_mode = WAL;
 
@@ -155,6 +162,7 @@ export async function initDb(): Promise<void> {
 
   await migrateAddCategoryColor(db);
   await migrateAddCategoryKind(db);
+  await runVersionedMigrations(db, existing !== null);
 
   const row = await db.getFirstAsync<{ count: number }>(
     'SELECT COUNT(*) as count FROM work_categories'
@@ -197,6 +205,151 @@ async function migrateAddCategoryKind(db: SQLite.SQLiteDatabase): Promise<void> 
   await db.execAsync(
     "ALTER TABLE work_categories ADD COLUMN kind TEXT NOT NULL DEFAULT 'machine'"
   );
+}
+
+// --- číslované migrace (oprava 2 a dál) ---
+//
+// NETRIVIÁLNÍ ROZHODNUTÍ - od opravy 2 se migrace číslují přes
+// `PRAGMA user_version` (dřívější migrace výš zůstávají, jsou idempotentní
+// přes PRAGMA table_info). Každá proběhne právě jednou. Před první
+// čekající migrací na už existující databázi se udělá ZÁLOHA celé
+// databáze vedle původního souboru (VACUUM INTO) - zadání "data v
+// telefonu se nesmí ztratit". Migrace samy nic fyzicky nemažou (jen
+// is_deleted / přesun do *_removed tabulek).
+
+const SCHEMA_VERSION = 1;
+const BACKUP_FILE_NAME = 'dochazka-zaloha-pred-opravami-2.db';
+
+async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: boolean): Promise<void> {
+  const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+  const version = row?.user_version ?? 0;
+  if (version >= SCHEMA_VERSION) return;
+
+  if (hadExistingDb) await backupDatabase(db);
+
+  if (version < 1) {
+    await migrateV1LocationEvents(db);
+    await db.execAsync('PRAGMA user_version = 1');
+  }
+}
+
+async function backupDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
+  const dir = db.databasePath.substring(0, db.databasePath.lastIndexOf('/'));
+  const target = `${dir}/${BACKUP_FILE_NAME}`.replace(/'/g, "''");
+  try {
+    await db.execAsync(`VACUUM INTO '${target}'`);
+    await setInternalValueWith(db, 'backup_before_fixes_2', `ok ${new Date().toISOString()}`);
+  } catch (err) {
+    // Typicky "soubor už existuje" (záloha z dřívějšího pokusu) - ta
+    // původní je cennější, nepřepisovat. Migrace jsou nedestruktivní,
+    // takže pokračovat i bez nové zálohy je bezpečné.
+    await setInternalValueWith(db, 'backup_before_fixes_2', `chyba: ${String(err)}`);
+  }
+}
+
+async function addColumnIfMissing(db: SQLite.SQLiteDatabase, table: string, column: string, definition: string) {
+  const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
+  if (columns.some((c) => c.name === column)) return;
+  await db.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+// Oprava 2, skupina A - pobyty se odvozují z událostí (viz lib/visitEngine.ts).
+async function migrateV1LocationEvents(db: SQLite.SQLiteDatabase): Promise<void> {
+  await addColumnIfMissing(db, 'visits', 'start_uncertain', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing(db, 'visits', 'deleted_by', 'TEXT');
+  await addColumnIfMissing(db, 'places', 'is_private', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing(db, 'debug_log', 'delivered_at', 'TEXT');
+  await addColumnIfMissing(db, 'debug_log', 'delivered_battery', 'REAL');
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS location_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fingerprint TEXT NOT NULL UNIQUE,
+      kind TEXT NOT NULL,
+      event_at TEXT NOT NULL,
+      latitude REAL,
+      longitude REAL,
+      accuracy_m REAL,
+      place_id INTEGER,
+      received_at TEXT NOT NULL,
+      origin TEXT NOT NULL DEFAULT 'live'
+    );
+    CREATE INDEX IF NOT EXISTS idx_location_events_event_at ON location_events (event_at);
+
+    CREATE TABLE IF NOT EXISTS geocode_cache (
+      key TEXT PRIMARY KEY NOT NULL,
+      locality TEXT NOT NULL,
+      looked_up_at TEXT NOT NULL
+    );
+  `);
+
+  // Domov = soukromé místo (A4).
+  await db.runAsync('UPDATE places SET is_private = 1 WHERE is_home = 1');
+
+  // Časy pobytů na jednotný formát UTC ISO (toISOString). Ruční úpravy
+  // v Detailu dne se dřív ukládaly v MÍSTNÍM čase bez zóny
+  // ("2026-10-04T14:43:00"), CLVisit v UTC ("...Z") - textové porovnání
+  // v dotazech na den pak ujíždělo o 2 h.
+  const visitTimes = await db.getAllAsync<{ id: number; start_at: string; end_at: string | null }>(
+    'SELECT id, start_at, end_at FROM visits'
+  );
+  for (const v of visitTimes) {
+    const start = normalizeIso(v.start_at);
+    const end = v.end_at === null ? null : normalizeIso(v.end_at);
+    if (start !== v.start_at || end !== v.end_at) {
+      await db.runAsync('UPDATE visits SET start_at = ?, end_at = ? WHERE id = ?', [start, end, v.id]);
+    }
+  }
+
+  // Přehrání CLVisit událostí z ladicího deníku (zadání: rekonstrukce
+  // pobytů 2.-4. 10.). Duplicity zmizí díky otisku (UNIQUE fingerprint).
+  const logged = await db.getAllAsync<{ timestamp: string; event_type: string; latitude: number | null; longitude: number | null }>(
+    `SELECT timestamp, event_type, latitude, longitude FROM debug_log
+     WHERE event_type IN ('arrival', 'departure') AND detail LIKE 'CLVisit%'
+     ORDER BY timestamp`
+  );
+  let firstReplayedAt: string | null = null;
+  for (const entry of logged) {
+    const eventAt = normalizeIso(entry.timestamp);
+    if (firstReplayedAt === null || eventAt < firstReplayedAt) firstReplayedAt = eventAt;
+    await insertLocationEventWith(db, {
+      kind: entry.event_type === 'arrival' ? 'visit_arrival' : 'visit_departure',
+      eventAt,
+      latitude: entry.latitude,
+      longitude: entry.longitude,
+      accuracyM: null,
+      placeId: null,
+      receivedAt: eventAt,
+      origin: 'debug_log_replay',
+    });
+  }
+
+  // Automatické pobyty z doby PŘED začátkem deníku (nebo všechny, když
+  // je deník prázdný) se převedou na umělé události příjezd/odjezd, ať
+  // je přepočet zachová (a zároveň sloučí duplicity a ořízne překryvy).
+  // Ruční pobyty se nemění vůbec.
+  const legacy = await db.getAllAsync<{ place_id: number | null; unknown_latitude: number | null; unknown_longitude: number | null; start_at: string; end_at: string | null }>(
+    `SELECT place_id, unknown_latitude, unknown_longitude, start_at, end_at FROM visits
+     WHERE is_deleted = 0 AND source != 'manual' ${firstReplayedAt ? 'AND start_at < ?' : ''}
+     ORDER BY start_at`,
+    firstReplayedAt ? [firstReplayedAt] : []
+  );
+  for (const v of legacy) {
+    const base = { latitude: v.unknown_latitude, longitude: v.unknown_longitude, accuracyM: null, placeId: v.place_id, origin: 'legacy_visit' as const };
+    await insertLocationEventWith(db, { ...base, kind: 'visit_arrival', eventAt: v.start_at, receivedAt: v.start_at });
+    if (v.end_at !== null) {
+      await insertLocationEventWith(db, { ...base, kind: 'visit_departure', eventAt: v.end_at, receivedAt: v.end_at });
+    }
+  }
+
+  // Samotné nahrazení starých pobytů přepočtem udělá lib/visits.ts ->
+  // finishLegacyVisitMigrationIfNeeded() (potřebuje logiku pobytů a ta
+  // do datové vrstvy nepatří).
+  await setInternalValueWith(db, KEY_VISITS_REBUILD_PENDING, '1');
+}
+
+export function normalizeIso(value: string): string {
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? value : new Date(ms).toISOString();
 }
 
 // --- kategorie prací / stroje ---
@@ -490,6 +643,8 @@ export async function wipeAllData(): Promise<void> {
     DELETE FROM visits;
     DELETE FROM location_points;
     DELETE FROM debug_log;
+    DELETE FROM location_events;
+    DELETE FROM geocode_cache;
   `);
   await seedDefaultCategories(db);
 }
@@ -504,6 +659,7 @@ interface PlaceRow {
   radius_m: number;
   order_label: string;
   is_home: number;
+  is_private: number;
   is_deleted: number;
 }
 
@@ -516,6 +672,7 @@ function mapPlace(row: PlaceRow): Place {
     radiusM: row.radius_m,
     orderLabel: row.order_label,
     isHome: row.is_home === 1,
+    isPrivate: row.is_private === 1 || row.is_home === 1,
     isDeleted: row.is_deleted === 1,
   };
 }
@@ -530,30 +687,31 @@ export async function listPlaces(includeDeleted = false): Promise<Place[]> {
   return rows.map(mapPlace);
 }
 
-export async function createPlace(
-  name: string,
-  latitude: number,
-  longitude: number,
-  radiusM: number,
-  orderLabel: string,
-  isHome: boolean
-): Promise<number> {
+export interface PlaceFields {
+  name: string;
+  latitude: number;
+  longitude: number;
+  radiusM: number;
+  orderLabel: string;
+  isHome: boolean;
+  isPrivate: boolean;
+}
+
+// Domov je vždy soukromé místo (A4) - hlídá se tady, ne jen v UI.
+export async function createPlace(fields: PlaceFields): Promise<number> {
   const db = await getDb();
   const result = await db.runAsync(
-    'INSERT INTO places (name, latitude, longitude, radius_m, order_label, is_home) VALUES (?, ?, ?, ?, ?, ?)',
-    [name, latitude, longitude, radiusM, orderLabel, isHome ? 1 : 0]
+    'INSERT INTO places (name, latitude, longitude, radius_m, order_label, is_home, is_private) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [fields.name, fields.latitude, fields.longitude, fields.radiusM, fields.orderLabel, fields.isHome ? 1 : 0, fields.isHome || fields.isPrivate ? 1 : 0]
   );
   return result.lastInsertRowId;
 }
 
-export async function updatePlace(
-  id: number,
-  fields: { name: string; latitude: number; longitude: number; radiusM: number; orderLabel: string; isHome: boolean }
-): Promise<void> {
+export async function updatePlace(id: number, fields: PlaceFields): Promise<void> {
   const db = await getDb();
   await db.runAsync(
-    'UPDATE places SET name = ?, latitude = ?, longitude = ?, radius_m = ?, order_label = ?, is_home = ? WHERE id = ?',
-    [fields.name, fields.latitude, fields.longitude, fields.radiusM, fields.orderLabel, fields.isHome ? 1 : 0, id]
+    'UPDATE places SET name = ?, latitude = ?, longitude = ?, radius_m = ?, order_label = ?, is_home = ?, is_private = ? WHERE id = ?',
+    [fields.name, fields.latitude, fields.longitude, fields.radiusM, fields.orderLabel, fields.isHome ? 1 : 0, fields.isHome || fields.isPrivate ? 1 : 0, id]
   );
 }
 
@@ -564,7 +722,12 @@ export async function deletePlace(id: number): Promise<void> {
   await db.runAsync('UPDATE places SET is_deleted = 1 WHERE id = ?', [id]);
 }
 
-// --- pobyty (etapa 2, ČÁST B) ---
+// --- pobyty (etapa 2, ČÁST B; oprava 2 - odvozené z událostí) ---
+//
+// Automatické pobyty (source clvisit/geofence/continuous) jsou ODVOZENÁ
+// data - lib/visits.ts je přepočítává z location_events a tady se jen
+// vymění (replaceDerivedVisits). Trvalé jsou jen ruční zásahy: ručně
+// upravený pobyt (source 'manual') a ručně smazaný (deleted_by 'user').
 
 interface VisitRow {
   id: number;
@@ -574,10 +737,13 @@ interface VisitRow {
   start_at: string;
   end_at: string | null;
   source: VisitSource;
+  start_uncertain: number;
   is_deleted: number;
+  deleted_by: 'user' | 'migration' | null;
   place_name: string | null;
   place_radius_m: number | null;
   place_is_home: number | null;
+  place_is_private: number | null;
 }
 
 function mapVisit(row: VisitRow): VisitWithPlace {
@@ -589,97 +755,237 @@ function mapVisit(row: VisitRow): VisitWithPlace {
     startAt: row.start_at,
     endAt: row.end_at,
     source: row.source,
+    startUncertain: row.start_uncertain === 1,
     isDeleted: row.is_deleted === 1,
+    deletedBy: row.deleted_by,
     placeName: row.place_name,
     placeRadiusM: row.place_radius_m,
     placeIsHome: row.place_is_home === 1,
+    placeIsPrivate: row.place_is_private === 1 || row.place_is_home === 1,
   };
 }
 
-// Pobyty, co se (aspoň částečně) PŘEKRÝVAJÍ s daným dnem - ne jen ty,
-// co v ten den ZAČÍNAJÍ, ať se správně zobrazí i pobyt přes půlnoc
-// (viz PRŮBĚH DNE v Detailu dne).
+const VISIT_SELECT = `SELECT v.*, p.name as place_name, p.radius_m as place_radius_m,
+         p.is_home as place_is_home, p.is_private as place_is_private
+  FROM visits v
+  LEFT JOIN places p ON p.id = v.place_id`;
+
+// Pobyty, co se (aspoň částečně) PŘEKRÝVAJÍ s daným LOKÁLNÍM dnem.
+// Ořez na rozsah dne a "probíhá jen do teď" řeší lib/dayTimeline.ts.
 export async function getVisitsForDay(date: string): Promise<VisitWithPlace[]> {
   const db = await getDb();
-  const dayStart = `${date}T00:00:00`;
-  const dayEnd = `${date}T23:59:59`;
+  const { startMs, endMs } = localDayBounds(date);
   const rows = await db.getAllAsync<VisitRow>(
-    `SELECT v.*, p.name as place_name, p.radius_m as place_radius_m, p.is_home as place_is_home
-     FROM visits v
-     LEFT JOIN places p ON p.id = v.place_id
+    `${VISIT_SELECT}
      WHERE v.is_deleted = 0
-       AND v.start_at <= ?
+       AND v.start_at < ?
        AND (v.end_at IS NULL OR v.end_at >= ?)
      ORDER BY v.start_at`,
-    [dayEnd, dayStart]
+    [new Date(endMs).toISOString(), new Date(startMs).toISOString()]
   );
   return rows.map(mapVisit);
 }
 
-export async function createVisit(visit: {
+// Ruční úprava = pobyt se stává ručním (přepočet ho pak nepřepíše).
+export async function updateVisitTimes(id: number, startAt: string, endAt: string | null): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE visits SET start_at = ?, end_at = ?, start_uncertain = 0, source = 'manual' WHERE id = ?", [
+    startAt,
+    endAt,
+    id,
+  ]);
+}
+
+// Ruční smazání - zůstává jako "potlačení", ať ho přepočet nevrátí.
+export async function deleteVisit(id: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE visits SET is_deleted = 1, deleted_by = 'user' WHERE id = ?", [id]);
+}
+
+// Začátek automatického pobytu, který přepočet od `fromIso` musí vzít
+// celý: běží přes `fromIso`, nebo skončil těsně před ním (do 15 min -
+// mohl by se sloučit s pobytem na stejném místě).
+export async function findDerivedVisitStartNear(fromIso: string, mergeGapMs: number): Promise<string | null> {
+  const db = await getDb();
+  const gapIso = new Date(Date.parse(fromIso) - mergeGapMs).toISOString();
+  const row = await db.getFirstAsync<{ start_at: string }>(
+    `SELECT start_at FROM visits
+     WHERE is_deleted = 0 AND source != 'manual' AND start_at < ? AND (end_at IS NULL OR end_at >= ?)
+     ORDER BY start_at LIMIT 1`,
+    [fromIso, gapIso]
+  );
+  return row?.start_at ?? null;
+}
+
+// Ruční a ručně smazané pobyty, co zasahují do přepočítávaného období.
+export async function listUserTouchedVisits(fromIso: string | null): Promise<VisitWithPlace[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<VisitRow>(
+    `${VISIT_SELECT}
+     WHERE ((v.is_deleted = 0 AND v.source = 'manual') OR (v.is_deleted = 1 AND v.deleted_by = 'user'))
+       ${fromIso ? 'AND (v.end_at IS NULL OR v.end_at >= ?)' : ''}
+     ORDER BY v.start_at`,
+    fromIso ? [fromIso] : []
+  );
+  return rows.map(mapVisit);
+}
+
+export interface DerivedVisit {
   placeId: number | null;
   unknownLatitude: number | null;
   unknownLongitude: number | null;
   startAt: string;
   endAt: string | null;
-  source: VisitSource;
-}): Promise<number> {
-  const db = await getDb();
-  const result = await db.runAsync(
-    `INSERT INTO visits (place_id, unknown_latitude, unknown_longitude, start_at, end_at, source)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [
-      visit.placeId,
-      visit.unknownLatitude,
-      visit.unknownLongitude,
-      visit.startAt,
-      visit.endAt,
-      visit.source,
-    ]
-  );
-  return result.lastInsertRowId;
+  startUncertain: boolean;
+  source: EngineVisitSource;
 }
 
-export async function updateVisitTimes(id: number, startAt: string, endAt: string | null): Promise<void> {
+// Výměna automatických pobytů od `fromIso` (null = všech) za nově
+// spočítané, v jedné transakci. `manualEnds` = otevřené ruční pobyty,
+// které uzavřel začátek dalšího pobytu (A2 "jen jeden pobyt najednou").
+export async function replaceDerivedVisits(
+  fromIso: string | null,
+  visits: DerivedVisit[],
+  manualEnds: Array<{ id: number; endAt: string }>
+): Promise<void> {
   const db = await getDb();
-  await db.runAsync('UPDATE visits SET start_at = ?, end_at = ? WHERE id = ?', [startAt, endAt, id]);
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync(
+      `DELETE FROM visits WHERE is_deleted = 0 AND source != 'manual' ${fromIso ? 'AND start_at >= ?' : ''}`,
+      fromIso ? [fromIso] : []
+    );
+    for (const v of visits) {
+      await txn.runAsync(
+        `INSERT INTO visits (place_id, unknown_latitude, unknown_longitude, start_at, end_at, source, start_uncertain)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [v.placeId, v.unknownLatitude, v.unknownLongitude, v.startAt, v.endAt, v.source, v.startUncertain ? 1 : 0]
+      );
+    }
+    for (const m of manualEnds) {
+      await txn.runAsync('UPDATE visits SET end_at = ? WHERE id = ?', [m.endAt, m.id]);
+    }
+  });
 }
 
-// Nejnovější pobyt bez místa a bez konce - "probíhající" pobyt, co se
-// má doplnit, až přijde odpovídající "depart" (viz lib/locationTracking.ts).
-export async function findOpenVisit(): Promise<VisitWithPlace | null> {
-  const db = await getDb();
-  const row = await db.getFirstAsync<VisitRow>(
-    `SELECT v.*, p.name as place_name, p.radius_m as place_radius_m, p.is_home as place_is_home
-     FROM visits v
-     LEFT JOIN places p ON p.id = v.place_id
-     WHERE v.is_deleted = 0 AND v.end_at IS NULL
-     ORDER BY v.start_at DESC
-     LIMIT 1`
-  );
-  return row ? mapVisit(row) : null;
-}
-
-export async function closeVisit(id: number, endAt: string): Promise<void> {
-  const db = await getDb();
-  await db.runAsync('UPDATE visits SET end_at = ? WHERE id = ?', [endAt, id]);
-}
-
-export async function deleteVisit(id: number): Promise<void> {
-  const db = await getDb();
-  await db.runAsync('UPDATE visits SET is_deleted = 1 WHERE id = ?', [id]);
-}
-
-// Spojí pobyt s nově uloženým místem (viz "Neznámé místo" -> "Uložit
-// jako nové místo" v Detailu dne) - jen tenhle jeden záznam, ne
-// hromadně, ať se neprepisují jiné "neznámé" pobyty, co s tímhle
-// místem možná nesouvisí.
-export async function attachVisitToPlace(visitId: number, placeId: number): Promise<void> {
+// Migrace opravy 2: staré automatické pobyty nahradí přepočet z událostí.
+export async function softDeleteLegacyAutoVisits(): Promise<void> {
   const db = await getDb();
   await db.runAsync(
-    'UPDATE visits SET place_id = ?, unknown_latitude = NULL, unknown_longitude = NULL WHERE id = ?',
-    [placeId, visitId]
+    "UPDATE visits SET is_deleted = 1, deleted_by = 'migration' WHERE is_deleted = 0 AND source != 'manual'"
   );
+}
+
+// --- události polohy (oprava 2, A1) ---
+//
+// Každá událost (CLVisit příjezd/odjezd, geofence, significant change,
+// průběžný bod) se uloží JEDNOU - otisk (typ + čas události [+ místo /
+// souřadnice]) je UNIQUE, takže opakované doručení téže události iOS
+// nic nezmění. Z téhle tabulky se počítají pobyty (lib/visits.ts).
+
+export type LocationEventOrigin = 'live' | 'debug_log_replay' | 'legacy_visit';
+
+export interface NewLocationEvent {
+  kind: LocationEventKind;
+  eventAt: string; // ISO - čas UDÁLOSTI
+  latitude: number | null;
+  longitude: number | null;
+  accuracyM: number | null;
+  placeId: number | null;
+  receivedAt: string; // ISO - kdy ji appka dostala
+  origin: LocationEventOrigin;
+}
+
+const LOCATION_EVENTS_MAX_AGE_DAYS = 60;
+
+export function locationEventFingerprint(e: Pick<NewLocationEvent, 'kind' | 'eventAt' | 'latitude' | 'longitude' | 'placeId'>): string {
+  const ms = Date.parse(e.eventAt);
+  const second = Math.floor(ms / 1000);
+  switch (e.kind) {
+    case 'visit_arrival':
+    case 'visit_departure':
+      // Stejný CLVisit doručený znovu má stejný čas; souřadnice se mezi
+      // aktualizacemi téže návštěvy mírně liší, proto v otisku nejsou.
+      return `${e.kind}|${second}`;
+    case 'geofence_enter':
+    case 'geofence_exit':
+      return `${e.kind}|${second}|${e.placeId}`;
+    default:
+      return `${e.kind}|${ms}|${e.latitude?.toFixed(5)}|${e.longitude?.toFixed(5)}`;
+  }
+}
+
+async function insertLocationEventWith(db: SQLite.SQLiteDatabase, e: NewLocationEvent): Promise<boolean> {
+  const result = await db.runAsync(
+    `INSERT OR IGNORE INTO location_events
+       (fingerprint, kind, event_at, latitude, longitude, accuracy_m, place_id, received_at, origin)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      locationEventFingerprint(e),
+      e.kind,
+      normalizeIso(e.eventAt),
+      e.latitude,
+      e.longitude,
+      e.accuracyM,
+      e.placeId,
+      normalizeIso(e.receivedAt),
+      e.origin,
+    ]
+  );
+  return result.changes > 0;
+}
+
+// Vrací pro každou událost, jestli byla NOVÁ (false = duplicita).
+export async function insertLocationEvents(events: NewLocationEvent[]): Promise<boolean[]> {
+  const db = await getDb();
+  const inserted: boolean[] = [];
+  for (const e of events) inserted.push(await insertLocationEventWith(db, e));
+  if (inserted.some(Boolean)) {
+    const cutoff = new Date(Date.now() - LOCATION_EVENTS_MAX_AGE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    await db.runAsync('DELETE FROM location_events WHERE event_at < ?', [cutoff]);
+  }
+  return inserted;
+}
+
+export async function listLocationEvents(fromIso: string | null): Promise<EngineEvent[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ kind: LocationEventKind; event_at: string; latitude: number | null; longitude: number | null; place_id: number | null }>(
+    `SELECT kind, event_at, latitude, longitude, place_id FROM location_events
+     ${fromIso ? 'WHERE event_at >= ?' : ''}
+     ORDER BY event_at`,
+    fromIso ? [fromIso] : []
+  );
+  return rows.map((r) => ({
+    kind: r.kind,
+    atMs: Date.parse(r.event_at),
+    latitude: r.latitude,
+    longitude: r.longitude,
+    placeId: r.place_id,
+  }));
+}
+
+// --- interní hodnoty (stav appky, ne uživatelské nastavení) ---
+//
+// Ve stejné tabulce `settings`, s prefixem "internal." - getSettings()
+// je ignoruje (čte jen klíče z SETTINGS_KEYS).
+
+export const KEY_VISITS_REBUILD_PENDING = 'visits_rebuild_pending';
+
+async function setInternalValueWith(db: SQLite.SQLiteDatabase, key: string, value: string): Promise<void> {
+  await db.runAsync(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+    [`internal.${key}`, value]
+  );
+}
+
+export async function setInternalValue(key: string, value: string): Promise<void> {
+  await setInternalValueWith(await getDb(), key, value);
+}
+
+export async function getInternalValue(key: string): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>('SELECT value FROM settings WHERE key = ?', [`internal.${key}`]);
+  return row?.value ?? null;
 }
 
 // --- ladicí deník (etapa 2, ČÁST B bod 9) ---
@@ -692,6 +998,8 @@ interface DebugLogRow {
   battery_level: number | null;
   latitude: number | null;
   longitude: number | null;
+  delivered_at: string | null;
+  delivered_battery: number | null;
 }
 
 function mapDebugLog(row: DebugLogRow): DebugLogEntry {
@@ -703,6 +1011,8 @@ function mapDebugLog(row: DebugLogRow): DebugLogEntry {
     batteryLevel: row.battery_level,
     latitude: row.latitude,
     longitude: row.longitude,
+    deliveredAt: row.delivered_at,
+    deliveredBattery: row.delivered_battery,
   };
 }
 
@@ -715,6 +1025,8 @@ export async function addDebugLogEntry(entry: {
   batteryLevel: number | null;
   latitude: number | null;
   longitude: number | null;
+  deliveredAt?: string | null;
+  deliveredBattery?: number | null;
 }): Promise<void> {
   // Jedno centrální místo pro zapnuto/vypnuto (Nastavení -> Aplikace ->
   // Ladicí deník) - volající se o to nemusí starat.
@@ -723,9 +1035,18 @@ export async function addDebugLogEntry(entry: {
 
   const db = await getDb();
   await db.runAsync(
-    `INSERT INTO debug_log (timestamp, event_type, detail, battery_level, latitude, longitude)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [entry.timestamp, entry.eventType, entry.detail, entry.batteryLevel, entry.latitude, entry.longitude]
+    `INSERT INTO debug_log (timestamp, event_type, detail, battery_level, latitude, longitude, delivered_at, delivered_battery)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      normalizeIso(entry.timestamp),
+      entry.eventType,
+      entry.detail,
+      entry.batteryLevel,
+      entry.latitude,
+      entry.longitude,
+      entry.deliveredAt ?? null,
+      entry.deliveredBattery ?? null,
+    ]
   );
   // Prořezání starých záznamů při každém zápisu - ladicí deník běží
   // dny/týdny v terénu, bez tohohle by neomezeně rostl.

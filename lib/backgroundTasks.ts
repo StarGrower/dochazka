@@ -7,8 +7,13 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 
-import { addDebugLogEntry, insertLocationPoint } from './db';
-import { GEOFENCE_TASK_NAME, CONTINUOUS_LOCATION_TASK_NAME, handleGeofenceEvent, processContinuousLocationPoint } from './locationTracking';
+import { addDebugLogEntry } from './db';
+import {
+  CONTINUOUS_LOCATION_TASK_NAME,
+  GEOFENCE_TASK_NAME,
+  handleGeofenceEvent,
+  processContinuousLocations,
+} from './locationTracking';
 
 interface GeofenceTaskData {
   eventType: Location.LocationGeofencingEventType;
@@ -48,9 +53,5 @@ TaskManager.defineTask<LocationUpdateTaskData>(CONTINUOUS_LOCATION_TASK_NAME, as
     return;
   }
   if (!data?.locations?.length) return;
-  for (const location of data.locations) {
-    const timestamp = new Date(location.timestamp).toISOString();
-    await insertLocationPoint(timestamp, location.coords.latitude, location.coords.longitude);
-    await processContinuousLocationPoint(timestamp, location.coords.latitude, location.coords.longitude);
-  }
+  await processContinuousLocations(data.locations);
 });

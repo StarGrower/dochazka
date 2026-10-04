@@ -38,15 +38,22 @@ export default function DebugLogScreen() {
     setEntries(await listDebugLog());
   }, []);
 
-  useFocusEffect(() => {
-    load();
-  });
+  // useCallback je NUTNÝ - bez něj se `load` spustí po každém
+  // překreslení a přepíše rozepsané hodnoty v polích (oprava 2).
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   const handleExport = async () => {
     const lines = entries.map((e) => {
       const battery = e.batteryLevel !== null ? `${Math.round(e.batteryLevel * 100)}%` : '-';
       const coords = e.latitude !== null && e.longitude !== null ? `${e.latitude.toFixed(5)},${e.longitude.toFixed(5)}` : '-';
-      return `${e.timestamp}\t${EVENT_LABELS[e.eventType]}\tbaterie ${battery}\t${coords}\t${e.detail}`;
+      const delivered = e.deliveredAt
+        ? `\tdoručeno ${e.deliveredAt}, baterie ${e.deliveredBattery !== null ? `${Math.round(e.deliveredBattery * 100)}%` : '-'}`
+        : '';
+      return `${e.timestamp}\t${EVENT_LABELS[e.eventType]}\tbaterie ${battery}\t${coords}\t${e.detail}${delivered}`;
     });
     const content = `Docházka - ladicí deník\nExportováno: ${new Date().toISOString()}\n\n${lines.join('\n')}`;
 
@@ -103,6 +110,12 @@ export default function DebugLogScreen() {
               baterie {item.batteryLevel !== null ? `${Math.round(item.batteryLevel * 100)}%` : '-'}
               {item.latitude !== null ? ` · ${item.latitude.toFixed(4)}, ${item.longitude?.toFixed(4)}` : ''}
             </Text>
+            {item.deliveredAt && (
+              <Text style={styles.meta}>
+                doručeno {formatTimestamp(item.deliveredAt)} · baterie{' '}
+                {item.deliveredBattery !== null ? `${Math.round(item.deliveredBattery * 100)}%` : '-'}
+              </Text>
+            )}
           </View>
         )}
         ListEmptyComponent={<Text style={styles.empty}>Zatím žádné záznamy.</Text>}

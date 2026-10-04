@@ -16,6 +16,7 @@ import KeyboardDoneAccessory from '@/components/KeyboardDoneAccessory';
 import { colors } from '@/theme';
 import { initDb } from '@/lib/db';
 import { initLocationTracking } from '@/lib/locationTracking';
+import { finishLegacyVisitMigrationIfNeeded } from '@/lib/visits';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -56,6 +57,9 @@ export default function RootLayout() {
 
   useEffect(() => {
     initDb()
+      // Oprava 2: přepočet pobytů po migraci - ještě před prvním
+      // zobrazením, ať Detail dne neukáže staré (poškozené) pobyty.
+      .then(() => finishLegacyVisitMigrationIfNeeded())
       .then(() => setDbReady(true))
       // initLocationTracking je "best effort" - chyba v ní (např. appka
       // běží v Expo Go, kde nativní modul neexistuje) nesmí appce

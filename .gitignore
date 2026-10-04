@@ -39,3 +39,15 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# SOUKROMÍ - repozitář je veřejný. Nic s polohami (zadání s ladicím
+# deníkem, exporty deníku, zálohy databáze, lokální testovací data)
+# se nesmí commitnout.
+ZADANI_OPRAVY*.md
+private/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+dochazka-ladici-denik*.txt
+*ladici-denik*

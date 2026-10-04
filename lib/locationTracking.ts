@@ -1,9 +1,10 @@
-// Orchestrace záznamu polohy (etapa 2, ČÁST B) - spojuje nativní modul
-// VisitMonitor (CLVisit + significant location changes, úsporný režim),
-// expo-location geofencing/continuous updates a odvozování "pobytů"
-// (visits) z obojího. Definice background tasků samotných (musí být v
-// globálním scope) je v lib/backgroundTasks.ts - ten na tyhle funkce
-// jen volá.
+// Orchestrace záznamu polohy (etapa 2, ČÁST B; oprava 2) - spojuje
+// nativní modul VisitMonitor (CLVisit + significant location changes,
+// úsporný režim) a expo-location geofencing/continuous updates. Každá
+// událost se jen ULOŽÍ (lib/db.ts -> location_events, bez duplicit) a
+// pobyty se z událostí přepočítají (lib/visits.ts). Definice background
+// tasků samotných (musí být v globálním scope) je v
+// lib/backgroundTasks.ts - ten na tyhle funkce jen volá.
 
 import * as Location from 'expo-location';
 import { Linking } from 'react-native';
@@ -11,21 +12,25 @@ import { Linking } from 'react-native';
 import { getBatteryLevelSafe } from './battery';
 import {
   addDebugLogEntry,
-  closeVisit,
-  createVisit,
-  deleteVisit,
-  findOpenVisit,
+  getInternalValue,
   getSettings,
+  insertLocationEvents,
+  insertLocationPoint,
   listPlaces,
+  normalizeIso,
+  setInternalValue,
+  type NewLocationEvent,
 } from './db';
 import { distanceMeters } from './geo';
+import { rebuildVisits, runExclusive } from './visits';
 import VisitMonitorModule from '../modules/visit-monitor/src/VisitMonitorModule';
 import type {
   PendingEvent,
   SignificantLocationChangeEvent,
   VisitEvent,
 } from '../modules/visit-monitor/src/VisitMonitor.types';
-import type { AppSettings } from './types';
+import type { AppSettings, DebugEventType } from './types';
+import type { LocationEventKind } from './visitEngine';
 
 export const GEOFENCE_TASK_NAME = 'dochazka-geofence-task';
 export const CONTINUOUS_LOCATION_TASK_NAME = 'dochazka-continuous-location-task';
@@ -64,46 +69,39 @@ export function openIosSettings(): void {
   Linking.openSettings();
 }
 
-// --- časové okno záznamu (zadání ČÁST B bod 8 - "mimo okno se nic nezaznamenává") ---
+// --- časové okno záznamu ---
+//
+// NETRIVIÁLNÍ ROZHODNUTÍ (oprava 2) - okno se vyhodnocuje vždy podle
+// ČASU UDÁLOSTI (ne zpracování) a už NEFILTRUJE pobyty: CLVisit/geofence
+// dodá iOS tak jako tak (žádná baterie navíc) a zahozený odjezd mimo
+// okno nechával pobyty neuzavřené (pátek 20:34 - sobota). Okno teď
+// určuje (1) kdy průběžný režim sbírá body a (2) jaká část pobytů na
+// pracovních místech se počítá do "NAVRHNOUT Z POBYTŮ".
 
-export function isWithinTrackingWindow(settings: AppSettings, at: Date = new Date()): boolean {
+export function isWithinTrackingWindow(settings: AppSettings, at: Date): boolean {
   if (!settings.trackingDays.includes(at.getDay())) return false;
   const minutes = at.getHours() * 60 + at.getMinutes();
   return minutes >= settings.trackingStartMinutes && minutes <= settings.trackingEndMinutes;
 }
 
-// --- hledání nejbližšího uloženého místa ---
-
-async function findNearestPlace(lat: number, lon: number): Promise<{ id: number; dist: number } | null> {
-  const places = await listPlaces();
-  let nearest: { id: number; dist: number } | null = null;
-  for (const place of places) {
-    const dist = distanceMeters(lat, lon, place.latitude, place.longitude);
-    if (dist <= place.radiusM && (!nearest || dist < nearest.dist)) {
-      nearest = { id: place.id, dist };
-    }
-  }
-  return nearest;
-}
-
-// Zavře pobyt a hned ho zahodí, pokud vyšel kratší než nastavená
-// hranice (zadání ČÁST B bod 4 - "krátké pobyty ignoruj, výchozí
-// 10 min" - semafor, tankování).
-async function closeVisitAndMaybeDiscard(visitId: number, startAt: string, endAt: string): Promise<void> {
-  await closeVisit(visitId, endAt);
-  const settings = await getSettings();
-  const durationMinutes = (new Date(endAt).getTime() - new Date(startAt).getTime()) / 60000;
-  if (durationMinutes < settings.minStayMinutes) {
-    await deleteVisit(visitId);
-  }
-}
-
 // --- geofencing (úsporný režim) ---
+//
+// NETRIVIÁLNÍ ROZHODNUTÍ (oprava 2, A1) - geofence se registrují JEN
+// když se změní sada sledovaných míst (otisk v interních hodnotách).
+// Každé `startGeofencingAsync` totiž iOS odpoví hlášením aktuálního
+// stavu všech oblastí ("jsi venku"/"jsi uvnitř") - dřív se registrovalo
+// při každém startu appky a každé významné změně polohy, a tahle
+// úvodní hlášení se brala jako příjezdy/odjezdy (bouře 30 výstupů za
+// 0,5 s v deníku). Hlášení do pár sekund po registraci se ignorují.
+
+const KEY_GEOFENCE_SIGNATURE = 'geofence_signature';
+const KEY_GEOFENCE_REGISTERED_AT = 'geofence_registered_at';
+const GEOFENCE_SETTLE_MS = 15 * 1000;
 
 export async function refreshGeofences(): Promise<void> {
   const places = await listPlaces();
   if (places.length === 0) {
-    await Location.stopGeofencingAsync(GEOFENCE_TASK_NAME).catch(() => {});
+    await stopGeofencing();
     return;
   }
 
@@ -131,195 +129,207 @@ export async function refreshGeofences(): Promise<void> {
     notifyOnEnter: true,
     notifyOnExit: true,
   }));
+  const signature = regions
+    .map((r) => `${r.identifier}:${r.latitude}:${r.longitude}:${r.radius}`)
+    .sort()
+    .join('|');
 
+  const started = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK_NAME).catch(() => false);
+  if (started && (await getInternalValue(KEY_GEOFENCE_SIGNATURE)) === signature) return;
+
+  await setInternalValue(KEY_GEOFENCE_REGISTERED_AT, String(Date.now()));
   await Location.startGeofencingAsync(GEOFENCE_TASK_NAME, regions);
+  await setInternalValue(KEY_GEOFENCE_SIGNATURE, signature);
 }
 
-// Volá se z lib/backgroundTasks.ts (geofencing task).
-export async function handleGeofenceEvent(
-  eventType: Location.LocationGeofencingEventType,
-  region: Location.LocationRegion
-): Promise<void> {
-  const placeId = Number(region.identifier);
-  const now = new Date().toISOString();
-  const battery = await getBatteryLevelSafe();
+async function stopGeofencing(): Promise<void> {
+  await Location.stopGeofencingAsync(GEOFENCE_TASK_NAME).catch(() => {});
+  await setInternalValue(KEY_GEOFENCE_SIGNATURE, '');
+}
 
-  if (eventType === Location.LocationGeofencingEventType.Enter) {
+// --- příjem událostí ---
+
+// Událost doručená později než tohle = "doručeno později" - baterie v
+// tu chvíli už neříká nic o čase události, zapíše se zvlášť.
+const LATE_DELIVERY_MS = 2 * 60 * 1000;
+
+const DEBUG_EVENT_TYPES: Record<LocationEventKind, DebugEventType> = {
+  visit_arrival: 'arrival',
+  visit_departure: 'departure',
+  geofence_enter: 'geofence_enter',
+  geofence_exit: 'geofence_exit',
+  significant: 'significant_change',
+  point: 'point',
+};
+
+interface IncomingEvent {
+  event: NewLocationEvent;
+  detail: string;
+  receiptBattery: number | null;
+  // Souřadnice do ladicího deníku, když je událost sama nemá (geofence -> střed oblasti).
+  logLatitude?: number;
+  logLongitude?: number;
+}
+
+// Uloží nové události (duplicity zahodí), zapíše je do ladicího deníku
+// a přepočítá pobyty od nejstarší nové události. Volat v runExclusive.
+async function ingest(items: IncomingEvent[]): Promise<void> {
+  if (items.length === 0) return;
+  const inserted = await insertLocationEvents(items.map((i) => i.event));
+
+  let earliestMs: number | null = null;
+  for (let i = 0; i < items.length; i++) {
+    if (!inserted[i]) continue;
+    const { event, detail, receiptBattery } = items[i];
+    const atMs = Date.parse(event.eventAt);
+    if (earliestMs === null || atMs < earliestMs) earliestMs = atMs;
+    const late = Date.parse(event.receivedAt) - atMs > LATE_DELIVERY_MS;
     await addDebugLogEntry({
-      timestamp: now,
-      eventType: 'geofence_enter',
-      detail: `místo #${placeId}`,
-      batteryLevel: battery,
-      latitude: region.latitude,
-      longitude: region.longitude,
+      timestamp: event.eventAt,
+      eventType: DEBUG_EVENT_TYPES[event.kind],
+      detail: late ? `${detail} · doručeno později` : detail,
+      batteryLevel: late ? null : receiptBattery,
+      latitude: event.latitude ?? items[i].logLatitude ?? null,
+      longitude: event.longitude ?? items[i].logLongitude ?? null,
+      deliveredAt: late ? event.receivedAt : null,
+      deliveredBattery: late ? receiptBattery : null,
     });
-    const settings = await getSettings();
-    if (!isWithinTrackingWindow(settings)) return;
-    const open = await findOpenVisit();
-    if (!open) {
-      await createVisit({
-        placeId,
-        unknownLatitude: null,
-        unknownLongitude: null,
-        startAt: now,
-        endAt: null,
-        source: 'geofence',
-      });
-    }
-  } else {
-    await addDebugLogEntry({
-      timestamp: now,
-      eventType: 'geofence_exit',
-      detail: `místo #${placeId}`,
-      batteryLevel: battery,
-      latitude: region.latitude,
-      longitude: region.longitude,
-    });
-    const open = await findOpenVisit();
-    if (open && open.placeId === placeId) {
-      await closeVisitAndMaybeDiscard(open.id, open.startAt, now);
-    }
   }
+
+  if (earliestMs !== null) await rebuildVisits(earliestMs);
 }
 
 // --- CLVisit a significant location change (nativní modul) ---
+//
+// NETRIVIÁLNÍ ROZHODNUTÍ (oprava 2, A1) - JEDINÁ cesta zpracování: živá
+// událost z nativního modulu jen spustí vyprázdnění fronty
+// (drainPendingEvents) a zpracuje se to, co ve frontě je. Dřív se
+// událost zpracovala živě A ZÁROVEŇ zůstala ve frontě, takže se při
+// dalším startu appky zpracovala znovu (PŘÍJEZD 4× v deníku).
 
-async function handleVisitEvent(event: VisitEvent): Promise<void> {
-  const settings = await getSettings();
-  const battery = await getBatteryLevelSafe();
-  const withinWindow = isWithinTrackingWindow(settings);
-
-  if (event.arrivalDate) {
-    await addDebugLogEntry({
-      timestamp: event.arrivalDate,
-      eventType: 'arrival',
-      detail: withinWindow ? 'CLVisit' : 'CLVisit (mimo časové okno, ignorováno)',
-      batteryLevel: battery,
-      latitude: event.latitude,
-      longitude: event.longitude,
-    });
-  }
-  if (event.departureDate) {
-    await addDebugLogEntry({
-      timestamp: event.departureDate,
-      eventType: 'departure',
-      detail: withinWindow ? 'CLVisit' : 'CLVisit (mimo časové okno, ignorováno)',
-      batteryLevel: battery,
-      latitude: event.latitude,
-      longitude: event.longitude,
-    });
-  }
-
-  if (!withinWindow) return;
-
-  const match = await findNearestPlace(event.latitude, event.longitude);
-
-  if (event.arrivalDate && !event.departureDate) {
-    const open = await findOpenVisit();
-    if (!open) {
-      await createVisit({
-        placeId: match ? match.id : null,
-        unknownLatitude: match ? null : event.latitude,
-        unknownLongitude: match ? null : event.longitude,
-        startAt: event.arrivalDate,
-        endAt: null,
-        source: 'clvisit',
-      });
+export function processNativeQueue(): Promise<void> {
+  return runExclusive(async () => {
+    let pending: PendingEvent[];
+    try {
+      pending = VisitMonitorModule.drainPendingEvents();
+    } catch {
+      return;
     }
-    return;
-  }
+    if (pending.length === 0) return;
 
-  if (event.departureDate) {
-    const open = await findOpenVisit();
-    if (open) {
-      await closeVisitAndMaybeDiscard(open.id, open.startAt, event.departureDate);
-    } else if (event.arrivalDate) {
-      // CLVisit přišlo rovnou s kompletním příchodem i odchodem -
-      // vytvořit a hned zavřít.
-      const id = await createVisit({
-        placeId: match ? match.id : null,
-        unknownLatitude: match ? null : event.latitude,
-        unknownLongitude: match ? null : event.longitude,
-        startAt: event.arrivalDate,
-        endAt: event.departureDate,
-        source: 'clvisit',
-      });
-      await closeVisitAndMaybeDiscard(id, event.arrivalDate, event.departureDate);
+    const battery = await getBatteryLevelSafe();
+    const nowIso = new Date().toISOString();
+    const items: IncomingEvent[] = [];
+    let sawSignificantChange = false;
+
+    for (const item of pending) {
+      const receivedAt = item.body.receivedAt ? normalizeIso(item.body.receivedAt) : nowIso;
+      if (item.name === 'onVisit') {
+        const v = item.body as VisitEvent;
+        const base = { latitude: v.latitude, longitude: v.longitude, accuracyM: v.horizontalAccuracy, placeId: null, receivedAt, origin: 'live' as const };
+        if (v.arrivalDate) {
+          items.push({ event: { ...base, kind: 'visit_arrival', eventAt: normalizeIso(v.arrivalDate) }, detail: 'CLVisit', receiptBattery: battery });
+        }
+        if (v.departureDate) {
+          items.push({ event: { ...base, kind: 'visit_departure', eventAt: normalizeIso(v.departureDate) }, detail: 'CLVisit', receiptBattery: battery });
+        }
+      } else {
+        const c = item.body as SignificantLocationChangeEvent;
+        sawSignificantChange = true;
+        items.push({
+          event: { kind: 'significant', eventAt: normalizeIso(c.timestamp), latitude: c.latitude, longitude: c.longitude, accuracyM: null, placeId: null, receivedAt, origin: 'live' },
+          detail: 'significant location change',
+          receiptBattery: battery,
+        });
+      }
     }
-  }
+
+    await ingest(items);
+
+    // Zadání ČÁST B: "obnovuj výběr nejbližších míst při významné změně
+    // polohy" - re-registrace jen když se výběr opravdu změní (viz výš).
+    if (sawSignificantChange) {
+      const settings = await getSettings();
+      if (settings.locationTrackingEnabled && settings.locationMode === 'economical') {
+        await refreshGeofences();
+      }
+    }
+  });
 }
 
-async function handleSignificantLocationChangeEvent(event: SignificantLocationChangeEvent): Promise<void> {
-  const battery = await getBatteryLevelSafe();
-  await addDebugLogEntry({
-    timestamp: event.timestamp,
-    eventType: 'significant_change',
-    detail: 'significant location change',
-    batteryLevel: battery,
-    latitude: event.latitude,
-    longitude: event.longitude,
-  });
+// Volá se z lib/backgroundTasks.ts (geofencing task).
+export function handleGeofenceEvent(
+  eventType: Location.LocationGeofencingEventType,
+  region: Location.LocationRegion
+): Promise<void> {
+  return runExclusive(async () => {
+    const placeId = Number(region.identifier);
+    const enter = eventType === Location.LocationGeofencingEventType.Enter;
+    const nowIso = new Date().toISOString();
+    const battery = await getBatteryLevelSafe();
 
-  const settings = await getSettings();
-  if (settings.locationTrackingEnabled && settings.locationMode === 'economical') {
-    await refreshGeofences();
-  }
+    const registeredAt = Number((await getInternalValue(KEY_GEOFENCE_REGISTERED_AT)) ?? 0);
+    if (Date.now() - registeredAt < GEOFENCE_SETTLE_MS) {
+      await addDebugLogEntry({
+        timestamp: nowIso,
+        eventType: enter ? 'geofence_enter' : 'geofence_exit',
+        detail: `místo #${placeId} · úvodní stav po registraci, ignorováno`,
+        batteryLevel: battery,
+        latitude: region.latitude,
+        longitude: region.longitude,
+      });
+      return;
+    }
+
+    await ingest([
+      {
+        event: {
+          kind: enter ? 'geofence_enter' : 'geofence_exit',
+          eventAt: nowIso,
+          latitude: null,
+          longitude: null,
+          accuracyM: null,
+          placeId,
+          receivedAt: nowIso,
+          origin: 'live',
+        },
+        detail: `místo #${placeId}`,
+        receiptBattery: battery,
+        logLatitude: region.latitude,
+        logLongitude: region.longitude,
+      },
+    ]);
+  });
 }
 
 // --- průběžný režim (zadání ČÁST B bod 3) ---
 
-// Volá se z lib/backgroundTasks.ts pro KAŽDÝ nový bod v průběžném
-// režimu - odvodí pobyty přímo z toho, "jsem/nejsem v okruhu nějakého
-// uloženého místa", bez čekání na CLVisit (ten se v průběžném režimu
-// nepoužívá).
-export async function processContinuousLocationPoint(
-  timestamp: string,
-  latitude: number,
-  longitude: number
-): Promise<void> {
-  const settings = await getSettings();
-  const battery = await getBatteryLevelSafe();
-  const withinWindow = isWithinTrackingWindow(settings, new Date(timestamp));
-
-  await addDebugLogEntry({
-    timestamp,
-    eventType: 'point',
-    detail: withinWindow ? 'průběžný bod' : 'průběžný bod (mimo časové okno)',
-    batteryLevel: battery,
-    latitude,
-    longitude,
-  });
-
-  if (!withinWindow) return;
-
-  const match = await findNearestPlace(latitude, longitude);
-  const open = await findOpenVisit();
-
-  if (match) {
-    if (!open) {
-      await createVisit({
-        placeId: match.id,
-        unknownLatitude: null,
-        unknownLongitude: null,
-        startAt: timestamp,
-        endAt: null,
-        source: 'continuous',
-      });
-    } else if (open.placeId !== match.id) {
-      await closeVisitAndMaybeDiscard(open.id, open.startAt, timestamp);
-      await createVisit({
-        placeId: match.id,
-        unknownLatitude: null,
-        unknownLongitude: null,
-        startAt: timestamp,
-        endAt: null,
-        source: 'continuous',
+// Volá se z lib/backgroundTasks.ts. Body jen v průběžném režimu a jen v
+// časovém okně (podle času bodu) - jinak se nic nezapisuje (oprava 2, A1).
+export function processContinuousLocations(locations: Location.LocationObject[]): Promise<void> {
+  return runExclusive(async () => {
+    const settings = await getSettings();
+    if (!settings.locationTrackingEnabled || settings.locationMode !== 'continuous') {
+      // Zbloudilé sledování (např. po přepnutí režimu) - vypnout.
+      await Location.stopLocationUpdatesAsync(CONTINUOUS_LOCATION_TASK_NAME).catch(() => {});
+      return;
+    }
+    const battery = await getBatteryLevelSafe();
+    const receivedAt = new Date().toISOString();
+    const items: IncomingEvent[] = [];
+    for (const location of locations) {
+      const at = new Date(location.timestamp);
+      if (!isWithinTrackingWindow(settings, at)) continue;
+      const eventAt = at.toISOString();
+      await insertLocationPoint(eventAt, location.coords.latitude, location.coords.longitude);
+      items.push({
+        event: { kind: 'point', eventAt, latitude: location.coords.latitude, longitude: location.coords.longitude, accuracyM: location.coords.accuracy ?? null, placeId: null, receivedAt, origin: 'live' },
+        detail: 'průběžný bod',
+        receiptBattery: battery,
       });
     }
-    // jinak: stejné místo jako předtím - pobyt pokračuje, nic se nemění
-  } else if (open) {
-    await closeVisitAndMaybeDiscard(open.id, open.startAt, timestamp);
-  }
+    await ingest(items);
+  });
 }
 
 // --- zapnutí/vypnutí sledování podle aktuálního nastavení ---
@@ -328,7 +338,7 @@ export async function applyLocationTrackingState(settings: AppSettings): Promise
   if (!settings.locationTrackingEnabled) {
     VisitMonitorModule.stopVisitMonitoring();
     VisitMonitorModule.stopSignificantLocationMonitoring();
-    await Location.stopGeofencingAsync(GEOFENCE_TASK_NAME).catch(() => {});
+    await stopGeofencing();
     await Location.stopLocationUpdatesAsync(CONTINUOUS_LOCATION_TASK_NAME).catch(() => {});
     return;
   }
@@ -341,7 +351,7 @@ export async function applyLocationTrackingState(settings: AppSettings): Promise
   } else {
     VisitMonitorModule.stopVisitMonitoring();
     VisitMonitorModule.stopSignificantLocationMonitoring();
-    await Location.stopGeofencingAsync(GEOFENCE_TASK_NAME).catch(() => {});
+    await stopGeofencing();
     await Location.startLocationUpdatesAsync(CONTINUOUS_LOCATION_TASK_NAME, {
       accuracy: Location.LocationAccuracy.Low,
       timeInterval: settings.continuousIntervalMinutes * 60 * 1000,
@@ -355,19 +365,15 @@ export async function applyLocationTrackingState(settings: AppSettings): Promise
 
 let listenersRegistered = false;
 
-// NETRIVIÁLNÍ ROZHODNUTÍ - `drainPendingEvents()` se volá PO
-// zaregistrování listenerů, ne před: `startVisitMonitoring()` (v
-// `applyLocationTrackingState` níž) nic nezmešká - frontu z nativní
-// strany (viz ios/VisitMonitorModule.swift) čteme navíc, pro to úzké
-// okno hned po probuzení appky na pozadí, kdy JS teprve startuje.
 export async function initLocationTracking(): Promise<void> {
   if (!listenersRegistered) {
     listenersRegistered = true;
-    VisitMonitorModule.addListener('onVisit', (event) => {
-      handleVisitEvent(event).catch(() => {});
+    // Obsah živé události se nečte - je i ve frontě, zpracuje se odtamtud.
+    VisitMonitorModule.addListener('onVisit', () => {
+      processNativeQueue().catch(() => {});
     });
-    VisitMonitorModule.addListener('onSignificantLocationChange', (event) => {
-      handleSignificantLocationChangeEvent(event).catch(() => {});
+    VisitMonitorModule.addListener('onSignificantLocationChange', () => {
+      processNativeQueue().catch(() => {});
     });
   }
 
@@ -380,14 +386,7 @@ export async function initLocationTracking(): Promise<void> {
     longitude: null,
   });
 
-  const pending: PendingEvent[] = VisitMonitorModule.drainPendingEvents();
-  for (const item of pending) {
-    if (item.name === 'onVisit') {
-      await handleVisitEvent(item.body as VisitEvent);
-    } else {
-      await handleSignificantLocationChangeEvent(item.body as SignificantLocationChangeEvent);
-    }
-  }
+  await processNativeQueue();
 
   const settings = await getSettings();
   await applyLocationTrackingState(settings);

@@ -30,9 +30,13 @@ export default function ZapisySettingsScreen() {
     setBreakDraft(String(s.breakMinutes));
   }, []);
 
-  useFocusEffect(() => {
-    load();
-  });
+  // useCallback je NUTNÝ - bez něj se `load` spustí po každém
+  // překreslení a přepíše rozepsané hodnoty v polích (oprava 2).
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   const patch = async (partial: Partial<AppSettings>) => {
     setSettings((s) => (s ? { ...s, ...partial } : s));

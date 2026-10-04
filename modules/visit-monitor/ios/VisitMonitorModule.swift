@@ -30,6 +30,14 @@
 // uloženou vlajku v UserDefaults a `startMonitoringVisits()`/
 // `startMonitoringSignificantLocationChanges()` zavolá znovu - je to
 // idempotentní (iOS nevadí, že se to zavolá, i když už sleduje).
+//
+// OPRAVA 2 - fronta je JEDINÁ cesta do JS: `sendEvent` jen upozorní JS,
+// že má frontu vyprázdnit (drainPendingEvents), obsah živé události se
+// v JS nečte. Dřív JS zpracoval živou událost a ta ve frontě zůstala, takže
+// se při dalším startu zpracovala znovu (duplicitní příjezdy). Zápis do
+// fronty (delegate, hlavní vlákno) a vyprázdnění (volání z JS, jiné
+// vlákno) hlídá zámek. K události se přidává `receivedAt` - kdy ji
+// modul dostal (JS z toho pozná "doručeno později").
 
 import CoreLocation
 import ExpoModulesCore
@@ -42,6 +50,7 @@ private let DEFAULTS_KEY_MONITORING_SIGNIFICANT = "VisitMonitor.monitoringSignif
 private let DEFAULTS_KEY_PENDING_EVENTS = "VisitMonitor.pendingEvents"
 
 public final class VisitMonitorModule: Module {
+  private let pendingEventsLock = NSLock()
   private lazy var delegate = LocationManagerDelegate(module: self)
   private lazy var locationManager: CLLocationManager = {
     let manager = CLLocationManager()
@@ -91,6 +100,8 @@ public final class VisitMonitorModule: Module {
     }
 
     Function("drainPendingEvents") { () -> [[String: Any]] in
+      self.pendingEventsLock.lock()
+      defer { self.pendingEventsLock.unlock() }
       let defaults = UserDefaults.standard
       let pending = defaults.array(forKey: DEFAULTS_KEY_PENDING_EVENTS) as? [[String: Any]] ?? []
       defaults.removeObject(forKey: DEFAULTS_KEY_PENDING_EVENTS)
@@ -99,11 +110,17 @@ public final class VisitMonitorModule: Module {
   }
 
   fileprivate func emit(_ name: String, _ body: [String: Any]) {
+    var payload = body
+    payload["receivedAt"] = ISO8601DateFormatter().string(from: Date())
+
+    pendingEventsLock.lock()
     let defaults = UserDefaults.standard
     var pending = defaults.array(forKey: DEFAULTS_KEY_PENDING_EVENTS) as? [[String: Any]] ?? []
-    pending.append(["name": name, "body": body])
+    pending.append(["name": name, "body": payload])
     defaults.set(pending, forKey: DEFAULTS_KEY_PENDING_EVENTS)
-    self.sendEvent(name, body)
+    pendingEventsLock.unlock()
+
+    self.sendEvent(name, payload)
   }
 }
 

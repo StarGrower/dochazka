@@ -34,15 +34,45 @@ import {
   updateDayRecordQuantity,
   updateVisitTimes,
 } from '@/lib/db';
+import { buildDayTimeline, localDayBounds, type TimelineStay } from '@/lib/dayTimeline';
 import { formatDayHeaderSummary, formatDayHeaderTitle, formatKc } from '@/lib/format';
 import { tapHaptic } from '@/lib/haptics';
 import type { AppSettings, DayWorkRecordWithCategory, VisitWithPlace, WorkCategory } from '@/lib/types';
 import { applyDayDefaultsIfNeeded, applyRounding } from '@/lib/workCalc';
 import { colors, fonts, radii } from '@/theme';
 
-function isoToHHMM(iso: string): string {
-  const d = new Date(iso);
+function msToHHMM(ms: number): string {
+  const d = new Date(ms);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function isoToHHMM(iso: string): string {
+  return msToHHMM(Date.parse(iso));
+}
+
+// Čas "HH:MM" na LOKÁLNÍ den daného okamžiku -> ISO (UTC). null = neplatný čas.
+function withLocalTime(baseMs: number, hhmm: string): string | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  if (h > 23 || m > 59) return null;
+  const d = new Date(baseMs);
+  d.setHours(h, m, 0, 0);
+  return d.toISOString();
+}
+
+function shortDate(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getDate()}. ${d.getMonth() + 1}.`;
+}
+
+// Úsek pobytu v tomhle dni - "0:00" / "24:00" u pobytu přes půlnoc,
+// "probíhá" u dnešního probíhajícího, "?" u neznámého začátku.
+function stayTimeLabel(stay: TimelineStay<VisitWithPlace>): string {
+  const from = stay.startsBeforeDay ? '0:00' : stay.visit.startUncertain ? '?' : msToHHMM(stay.segStartMs);
+  const to = stay.ongoing ? 'probíhá' : stay.endsAfterDay ? '24:00' : msToHHMM(stay.segEndMs);
+  return `${from}–${to}`;
 }
 
 function formatDurationMinutes(ms: number): string {
@@ -62,6 +92,7 @@ export default function DayDetailScreen() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [visits, setVisits] = useState<VisitWithPlace[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [visitEditTarget, setVisitEditTarget] = useState<VisitWithPlace | null>(null);
   const [visitStartDraft, setVisitStartDraft] = useState('');
   const [visitEndDraft, setVisitEndDraft] = useState('');
@@ -88,11 +119,16 @@ export default function DayDetailScreen() {
     setNote(n);
     setCategories(c);
     setVisits(v);
+    setNowMs(Date.now());
   }, [date]);
 
-  useFocusEffect(() => {
-    load();
-  });
+  // useCallback je NUTNÝ - bez něj se `load` spustí po každém
+  // překreslení a přepíše rozepsané hodnoty v polích (oprava 2).
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   const handleQuantityChange = async (recordId: number, quantity: number) => {
     setRecords((current) => current.map((r) => (r.id === recordId ? { ...r, quantity } : r)));
@@ -110,28 +146,46 @@ export default function DayDetailScreen() {
 
   const openEditVisit = (visit: VisitWithPlace) => {
     setVisitEditTarget(visit);
-    setVisitStartDraft(isoToHHMM(visit.startAt));
+    setVisitStartDraft(visit.startUncertain ? '' : isoToHHMM(visit.startAt));
     setVisitEndDraft(visit.endAt ? isoToHHMM(visit.endAt) : '');
   };
 
+  // Čas se mění v rámci PŮVODNÍHO dne začátku/konce (pobyt přes
+  // půlnoc se upravuje ze kteréhokoliv dne správně); nezměněné pole
+  // zachová původní hodnotu přesně.
   const commitVisitTimes = async () => {
     if (!visitEditTarget || !date) return;
-    const startMatch = /^(\d{1,2}):(\d{2})$/.exec(visitStartDraft.trim());
-    if (!startMatch) {
+    const target = visitEditTarget;
+    const originalStartDraft = target.startUncertain ? '' : isoToHHMM(target.startAt);
+    const originalEndDraft = target.endAt ? isoToHHMM(target.endAt) : '';
+    const viewDayStart = localDayBounds(date).startMs;
+
+    let startIso: string | null = target.startAt;
+    if (visitStartDraft.trim() !== originalStartDraft) {
+      startIso = withLocalTime(target.startUncertain ? viewDayStart : Date.parse(target.startAt), visitStartDraft);
+    }
+    if (startIso === null) {
       Alert.alert('Neplatný čas', 'Zadej čas "od" ve formátu HH:MM.');
       return;
     }
-    let endIso: string | null = null;
-    if (visitEndDraft.trim()) {
-      const endMatch = /^(\d{1,2}):(\d{2})$/.exec(visitEndDraft.trim());
-      if (!endMatch) {
-        Alert.alert('Neplatný čas', 'Zadej čas "do" ve formátu HH:MM, nebo pole smaž (pobyt probíhá).');
-        return;
+
+    let endIso: string | null = target.endAt;
+    if (visitEndDraft.trim() !== originalEndDraft) {
+      if (!visitEndDraft.trim()) {
+        endIso = null;
+      } else {
+        endIso = withLocalTime(target.endAt ? Date.parse(target.endAt) : viewDayStart, visitEndDraft);
+        if (endIso === null) {
+          Alert.alert('Neplatný čas', 'Zadej čas "do" ve formátu HH:MM, nebo pole smaž (pobyt probíhá).');
+          return;
+        }
       }
-      endIso = `${date}T${endMatch[1].padStart(2, '0')}:${endMatch[2]}:00`;
     }
-    const startIso = `${date}T${startMatch[1].padStart(2, '0')}:${startMatch[2]}:00`;
-    await updateVisitTimes(visitEditTarget.id, startIso, endIso);
+    if (endIso !== null && endIso <= startIso) {
+      Alert.alert('Neplatný čas', 'Konec pobytu musí být po jeho začátku.');
+      return;
+    }
+    await updateVisitTimes(target.id, startIso, endIso);
     setVisitEditTarget(null);
     await load();
   };
@@ -156,29 +210,42 @@ export default function DayDetailScreen() {
   const handleSaveUnknownAsPlace = (visit: VisitWithPlace) => {
     if (visit.unknownLatitude === null || visit.unknownLongitude === null) return;
     router.push(
-      `/settings/place-edit?lat=${visit.unknownLatitude}&lon=${visit.unknownLongitude}&fromVisitId=${visit.id}`
+      `/settings/place-edit?lat=${visit.unknownLatitude}&lon=${visit.unknownLongitude}&rebuildFrom=${encodeURIComponent(visit.startAt)}`
     );
   };
 
-  // Zadání ČÁST B bod 7 - z pobytů na PRACOVNÍCH místech (bez domova)
-  // za tenhle den, s odečtením přestávky a zaokrouhlením podle
+  // Zadání ČÁST B bod 7 / oprava 2 - jen pobyty mimo soukromá místa,
+  // jen úsek v TOMHLE dni a jen v časovém okně záznamu (Nastavení ->
+  // Poloha a trasy), s odečtením přestávky a zaokrouhlením podle
   // Nastavení -> Zápisy (stejná pravidla jako ruční NumPad).
+  // Neznámá místa se počítají (typicky nová stavba) - kde to nesedí,
+  // pobyt jde smazat nebo místo uložit jako soukromé.
   const handleSuggestFromVisits = () => {
     if (!settings || !date) return;
-    const dayStartMs = new Date(`${date}T00:00:00`).getTime();
-    const dayEndMs = dayStartMs + 24 * 60 * 60 * 1000;
+    const dayStart = localDayBounds(date).startMs;
+    const windowStart = new Date(dayStart);
+    windowStart.setMinutes(settings.trackingStartMinutes);
+    const windowEnd = new Date(dayStart);
+    windowEnd.setMinutes(settings.trackingEndMinutes);
+    const trackingDay = settings.trackingDays.includes(new Date(dayStart).getDay());
+
     let totalMs = 0;
-    for (const v of visits) {
-      if (v.placeIsHome) continue;
-      const startMs = Math.max(new Date(v.startAt).getTime(), dayStartMs);
-      const endMs = Math.min(v.endAt ? new Date(v.endAt).getTime() : Date.now(), dayEndMs);
-      if (endMs > startMs) totalMs += endMs - startMs;
+    if (trackingDay) {
+      for (const stay of stays) {
+        if (stay.visit.placeIsPrivate || stay.visit.startUncertain) continue;
+        const from = Math.max(stay.segStartMs, windowStart.getTime());
+        const to = Math.min(stay.segEndMs, windowEnd.getTime());
+        if (to > from) totalMs += to - from;
+      }
     }
     let hours = totalMs / 3600000;
     if (settings.autoSubtractBreak) hours = Math.max(0, hours - settings.breakMinutes / 60);
     hours = applyRounding(hours, settings.roundingMinutes);
     if (hours <= 0) {
-      Alert.alert('Nic k navržení', 'Pro tenhle den nejsou žádné pobyty na pracovních místech (mimo domov).');
+      Alert.alert(
+        'Nic k navržení',
+        'Pro tenhle den nejsou žádné pobyty na pracovních místech v časovém okně záznamu (Nastavení → Poloha a trasy).'
+      );
       return;
     }
     setSuggestedQuantity(Math.round(hours * 100) / 100);
@@ -233,6 +300,9 @@ export default function DayDetailScreen() {
   const usedIds = new Set(records.map((r) => r.categoryId));
   const pickerOptions = categories.filter((c) => !usedIds.has(c.id));
 
+  const timeline = date ? buildDayTimeline(visits, date, nowMs) : [];
+  const stays = timeline.filter((i): i is TimelineStay<VisitWithPlace> => i.kind === 'stay');
+
   if (!date || !settings) return null;
 
   return (
@@ -257,55 +327,67 @@ export default function DayDetailScreen() {
             <Text style={styles.sectionHeader}>PRŮBĚH DNE</Text>
             <Text style={styles.mapPlaceholderText}>Mapa přijde v etapě 3 - zatím jen seznam pobytů.</Text>
 
-            {visits.length === 0 ? (
+            {stays.length === 0 ? (
               <View style={styles.mapPlaceholder}>
                 <Text style={styles.mapPlaceholderText}>Zatím žádné zaznamenané pobyty pro tenhle den.</Text>
               </View>
             ) : (
-              visits.map((visit, index) => (
-                <View key={visit.id}>
-                  {index > 0 && (
-                    <View style={styles.travelRow}>
+              timeline.map((item, index) => {
+                if (item.kind === 'travel') {
+                  return (
+                    <View key={`travel-${index}`} style={styles.travelRow}>
                       <View style={styles.travelLine} />
                       <Text style={styles.travelText}>
-                        Přejezd
-                        {visits[index - 1].endAt
-                          ? ` · ${formatDurationMinutes(
-                              new Date(visit.startAt).getTime() - new Date(visits[index - 1].endAt as string).getTime()
-                            )}`
-                          : ''}
+                        Přejezd · {formatDurationMinutes(item.toMs - item.fromMs)}
                       </Text>
                     </View>
-                  )}
-                  <TouchableOpacity style={styles.visitRow} onPress={() => openEditVisit(visit)}>
-                    <View style={styles.visitBadge}>
-                      <Text style={styles.visitBadgeText}>{index + 1}</Text>
+                  );
+                }
+                const visit = item.visit;
+                const muted = visit.placeIsPrivate;
+                return (
+                  <TouchableOpacity
+                    key={visit.id}
+                    style={[styles.visitRow, muted && styles.visitRowPrivate]}
+                    onPress={() => openEditVisit(visit)}
+                  >
+                    <View style={[styles.visitBadge, muted && styles.visitBadgePrivate]}>
+                      <Text style={[styles.visitBadgeText, muted && styles.visitBadgeTextPrivate]}>
+                        {muted ? '⌂' : stays.indexOf(item) + 1}
+                      </Text>
                     </View>
                     <View style={styles.rowMain}>
-                      <Text style={styles.rowName}>{visit.placeName ?? 'Neznámé místo'}</Text>
-                      <Text style={styles.rowRate}>
-                        {isoToHHMM(visit.startAt)}–{visit.endAt ? isoToHHMM(visit.endAt) : 'probíhá'}
+                      <Text style={[styles.rowName, muted && styles.textPrivate]}>
+                        {visit.placeName ?? 'Neznámé místo'}
                       </Text>
-                      {!visit.placeName && (
+                      <Text style={styles.rowRate}>{stayTimeLabel(item)}</Text>
+                      {item.uncertainEnd && (
+                        <TouchableOpacity onPress={() => openEditVisit(visit)} hitSlop={8}>
+                          <Text style={styles.uncertainText}>
+                            Nejistý konec (bez odjezdu od {shortDate(Date.parse(visit.startAt))}) · Doplnit konec
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                      {visit.placeId === null && (
                         <TouchableOpacity onPress={() => handleSaveUnknownAsPlace(visit)} hitSlop={8}>
                           <Text style={styles.saveAsPlaceLink}>Uložit jako nové místo</Text>
                         </TouchableOpacity>
                       )}
                     </View>
                     <Text style={styles.visitDuration}>
-                      {visit.endAt
-                        ? formatDurationMinutes(new Date(visit.endAt).getTime() - new Date(visit.startAt).getTime())
-                        : 'probíhá'}
+                      {visit.startUncertain && !item.startsBeforeDay
+                        ? 'začátek neznámý'
+                        : formatDurationMinutes(item.segEndMs - item.segStartMs)}
                     </Text>
                   </TouchableOpacity>
-                </View>
-              ))
+                );
+              })
             )}
 
             <TouchableOpacity
-              style={[styles.addRowButton, visits.length === 0 && styles.addRowButtonDisabled]}
+              style={[styles.addRowButton, stays.length === 0 && styles.addRowButtonDisabled]}
               onPress={handleSuggestFromVisits}
-              disabled={visits.length === 0}
+              disabled={stays.length === 0}
             >
               <Text style={styles.addRowButtonText}>NAVRHNOUT Z POBYTŮ</Text>
             </TouchableOpacity>
@@ -438,13 +520,17 @@ export default function DayDetailScreen() {
         {visitEditTarget && (
           <>
             <Text style={styles.fieldLabel}>{visitEditTarget.placeName ?? 'Neznámé místo'}</Text>
+            <Text style={styles.rowRate}>
+              {visitEditTarget.startUncertain ? 'začátek neznámý' : `od ${shortDate(Date.parse(visitEditTarget.startAt))}`}
+              {visitEditTarget.endAt ? ` · do ${shortDate(Date.parse(visitEditTarget.endAt))}` : ' · bez odjezdu'}
+            </Text>
             <View style={styles.timeRow}>
               <Text style={styles.rowName}>Od</Text>
               <TextInput
                 style={styles.timeInput}
                 value={visitStartDraft}
                 onChangeText={setVisitStartDraft}
-                placeholder="08:00"
+                placeholder={visitEditTarget.startUncertain ? 'neznámý' : '08:00'}
                 placeholderTextColor={colors.textMuted}
                 keyboardType="numbers-and-punctuation"
                 inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
@@ -610,6 +696,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   visitBadgeText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: 12 },
+  // Soukromá místa (domov...) - tlumeně, ikona domku místo čísla (A4).
+  visitRowPrivate: { opacity: 0.6 },
+  visitBadgePrivate: { backgroundColor: colors.border },
+  visitBadgeTextPrivate: { color: colors.textMuted },
+  textPrivate: { color: colors.textMuted },
+  uncertainText: { color: colors.danger, fontFamily: fonts.bodySemiBold, fontSize: 11, marginTop: 2 },
   visitDuration: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12 },
   saveAsPlaceLink: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: 11, marginTop: 2 },
   suggestionHint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, marginBottom: 12 },

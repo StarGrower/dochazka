@@ -16,22 +16,24 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import NumPad from '@/components/NumPad';
 import ScreenHeader from '@/components/ScreenHeader';
+import SegmentedControl from '@/components/SegmentedControl';
 import ToggleRow from '@/components/ToggleRow';
-import { attachVisitToPlace, createPlace, listPlaces, updatePlace } from '@/lib/db';
+import { createPlace, listPlaces, updatePlace } from '@/lib/db';
 import { refreshGeofences } from '@/lib/locationTracking';
+import { rebuildRecentVisits } from '@/lib/visits';
 import { colors, fonts, radii, MIN_TOUCH } from '@/theme';
 
 const DEFAULT_COORDS = { latitude: 50.0755, longitude: 14.4378 }; // Praha - jen záložní výchozí, dokud se nezjistí GPS
 
 export default function PlaceEditScreen() {
   // `lat`/`lon` - předvyplnění z Detailu dne ("Neznámé místo" -> "Uložit
-  // jako nové místo", viz app/day/[date].tsx), `fromVisitId` ať po
-  // uložení jde ten konkrétní pobyt hned k novému místu připojit.
-  const { id, lat, lon, fromVisitId } = useLocalSearchParams<{
+  // jako nové místo", viz app/day/[date].tsx), `rebuildFrom` (ISO) - od
+  // kdy přepočítat pobyty, ať se ten pobyt hned přiřadí k novému místu.
+  const { id, lat, lon, rebuildFrom } = useLocalSearchParams<{
     id?: string;
     lat?: string;
     lon?: string;
-    fromVisitId?: string;
+    rebuildFrom?: string;
   }>();
   const placeId = id ? Number(id) : null;
 
@@ -39,6 +41,7 @@ export default function PlaceEditScreen() {
   const [radiusM, setRadiusM] = useState(150);
   const [orderLabel, setOrderLabel] = useState('');
   const [isHome, setIsHome] = useState(false);
+  const [isPrivate, setIsPrivate] = useState(false);
   const [coords, setCoords] = useState(DEFAULT_COORDS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -53,6 +56,7 @@ export default function PlaceEditScreen() {
           setRadiusM(existing.radiusM);
           setOrderLabel(existing.orderLabel);
           setIsHome(existing.isHome);
+          setIsPrivate(existing.isPrivate);
           setCoords({ latitude: existing.latitude, longitude: existing.longitude });
         }
       } else if (lat && lon) {
@@ -86,23 +90,24 @@ export default function PlaceEditScreen() {
     }
     setSaving(true);
     try {
-      let savedPlaceId = placeId;
+      const fields = {
+        name: trimmedName,
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        radiusM,
+        orderLabel,
+        isHome,
+        isPrivate: isHome || isPrivate,
+      };
       if (placeId) {
-        await updatePlace(placeId, {
-          name: trimmedName,
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-          radiusM,
-          orderLabel,
-          isHome,
-        });
+        await updatePlace(placeId, fields);
       } else {
-        savedPlaceId = await createPlace(trimmedName, coords.latitude, coords.longitude, radiusM, orderLabel, isHome);
-      }
-      if (fromVisitId && savedPlaceId) {
-        await attachVisitToPlace(Number(fromVisitId), savedPlaceId);
+        await createPlace(fields);
       }
       await refreshGeofences().catch(() => {});
+      // Nové/změněné místo -> pobyty posledních dnů (a od pobytu, ze
+      // kterého se místo uložilo) se přepočítají s novým místem.
+      await rebuildRecentVisits(rebuildFrom ? Date.parse(rebuildFrom) : undefined).catch(() => {});
       router.back();
     } finally {
       setSaving(false);
@@ -167,11 +172,31 @@ export default function PlaceEditScreen() {
         />
 
         <View style={styles.homeToggle}>
+          <SegmentedControl
+            label="Skupina"
+            value={isHome || isPrivate ? 'private' : 'work'}
+            onChange={(v) => {
+              // domov nejde přesunout mezi pracovní místa
+              if (!isHome) setIsPrivate(v === 'private');
+            }}
+            options={[
+              { label: 'Pracovní', value: 'work' },
+              { label: 'Soukromé', value: 'private' },
+            ]}
+          />
+          <Text style={styles.hint}>
+            {isHome || isPrivate
+              ? 'Soukromé místo se nepočítá do pracovní doby ani do návrhu hodin.'
+              : 'Pracovní místo se počítá do návrhu hodin podle pobytů.'}
+          </Text>
           <ToggleRow
             label="Domov"
-            description="Vyloučeno z návrhu hodin podle pobytů"
+            description="Domov je vždy soukromé místo"
             value={isHome}
-            onValueChange={setIsHome}
+            onValueChange={(v) => {
+              setIsHome(v);
+              if (v) setIsPrivate(true);
+            }}
           />
         </View>
 

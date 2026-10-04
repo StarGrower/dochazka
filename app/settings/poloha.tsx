@@ -22,6 +22,7 @@ import {
   openIosSettings,
 } from '@/lib/locationTracking';
 import type { AppSettings } from '@/lib/types';
+import { rebuildRecentVisits } from '@/lib/visits';
 import { colors, fonts, radii, MIN_TOUCH } from '@/theme';
 
 const WEEKDAYS: { label: string; value: number }[] = [
@@ -69,15 +70,20 @@ export default function PolohaSettingsScreen() {
     setEndDraft(minutesToHHMM(s.trackingEndMinutes));
   }, []);
 
-  useFocusEffect(() => {
-    load();
-  });
+  // useCallback je NUTNÝ - bez něj se `load` spustí po každém
+  // překreslení a přepíše rozepsané hodnoty v polích (oprava 2).
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   const patch = async (partial: Partial<AppSettings>) => {
     const next = settings ? { ...settings, ...partial } : null;
     setSettings(next);
     await updateSettings(partial);
     if (next) await applyLocationTrackingState(next);
+    if (partial.minStayMinutes !== undefined) await rebuildRecentVisits().catch(() => {});
   };
 
   const handleToggleTracking = async (value: boolean) => {
@@ -229,7 +235,10 @@ export default function PolohaSettingsScreen() {
             inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
           />
         </View>
-        <Text style={styles.hint}>Mimo tohle okno se poloha nezaznamenává.</Text>
+        <Text style={styles.hint}>
+          Příjezdy a odjezdy se zaznamenávají vždy (nestojí baterii navíc). Do návrhu hodin se počítá jen čas
+          na pracovních místech v tomhle okně a vybraných dnech; průběžný režim mimo okno nesbírá body.
+        </Text>
 
         <View style={styles.row}>
           <Text style={styles.label}>Minimální délka pobytu</Text>
