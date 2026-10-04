@@ -10,7 +10,7 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Test na iPhonu, 3 části (klávesnice, barvy, přestavba Nastavení) - HOTOVO.**
 **Etapa 2, ČÁST A (GitHub + sestavení) - HOTOVO, první build na GitHubu OVĚŘEN (13m59s, všechny kroky zelené, `.ipa` 14,7 MB).**
 **Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Test v terénu proběhl 2.-4. 10. 2026.**
-**Oprava 2 (po terénním testu etapy 2) - HOTOVO (skupiny A-F), viz sekce "Oprava 2" níž; čeká na sestavení a test v telefonu.**
+**Oprava 2 (po terénním testu etapy 2) - HOTOVO (skupiny A-F), build OVĚŘEN (run 37210061504, 13m21s, všechny kroky zelené vč. Swift modulu, `.ipa` ~15 MB). Čeká na test v telefonu - viz "Co otestovat v telefonu (oprava 2)".**
 
 - Etapa 3 (přejezdy, mapa, km) - nezačato.
 - Etapa 4 (export, záloha) - nezačato.
@@ -241,6 +241,42 @@ jiné položky a položky před 2. 10. zůstaly.
 Pozor: přiřazení příjezdu k místu #2 vyžaduje poloměr místa aspoň
 ~60 m (CLVisit hlásil bod ~255 m od středu, tolerance je poloměr +
 200 m). Při poloměru 50 m by se ukázalo "Neznámé místo".
+
+### Co otestovat v telefonu (oprava 2)
+
+Instalace jako dřív (Sideloadly, stejné Bundle ID -> data zůstanou).
+**Appku před instalací NEMAŽ.** Při prvním spuštění proběhnou migrace
+(záloha DB + přepočet pobytů) - start může trvat o chvilku déle.
+
+1. **Pobyty 2.-4. 10.** (Detail dne): Pá - místo #2 "?–20:23", přejezd,
+   domov 20:34–24:00; So - domov 0:00–6:49, přejezd, "Neznámé místo ·
+   u <obec>" 7:06–16:50, přejezd, domov 17:08–24:00; Ne - domov
+   0:00–14:32, přejezd, místo #2 14:43–… Domov tlumeně s ikonou domku.
+   5. 10. a dál nic "probíhá". (Pokud by Pá/Ne místo #2 vyšlo jako
+   "Neznámé místo", má místo poloměr pod ~60 m - zvětšit a pobyt se
+   přepočítá.)
+2. **Osobák 8 h** zmizel ze všech dnů od 2. 10. (i 9. a 25. 10.).
+3. **Nový den**: otevření dne nic neuloží; "+ ZAPSAT DNEŠEK" / "+ Přidat"
+   nabídne "VÝCHOZÍ POLOŽKY" (jen pracovní den, ne budoucí) - uloží se
+   až "POUŽÍT VÝCHOZÍ".
+4. **+ Přidat** -> stroj -> číselník + Hodiny/Dny/Km -> OK. Klepnutí na
+   položku -> úprava / Smazat.
+5. **Stroje a kategorie**: tři sazby, výchozí jednotka, příplatky
+   (prázdné = výchozí). Klávesnice u ceny se zavře klepnutím kamkoliv do
+   panelu, hodnota zůstane.
+6. **Zápisy**: délka dne jde změnit (i na 0), výchozí příplatky víkend/
+   svátek; v sobotu/neděli/svátek u položky "+X %".
+7. **Kalendář**: víkendy tlumeně, svátky červeně (28. 10., 17. 11.,
+   Vánoce); v detailu svátku jeho název.
+8. **Poznámka ke dni**: jde psát, uloží se.
+9. **Poloha a trasy**: časové okno jde změnit.
+10. **Aplikace**: žádná hmatová odezva; "Větší" písmo -> appka se znovu
+    načte a písmo je větší všude.
+11. **Ladicí deník** (večer): žádné duplicitní PŘÍJEZD/ODJEZD, po startu
+    appky jen jedno "úvodní stav po registraci, ignorováno" na místo (a
+    jen když se změnila místa), body jen v průběžném režimu a v okně;
+    u souřadnic "· u <obec>"; pozdě doručené "· doručeno později" +
+    baterie doručení zvlášť. Export mi pošli jako dřív.
 
 ## DŮLEŽITÉ - co jsem NEMOHL ověřit sám (ČÁST B)
 
