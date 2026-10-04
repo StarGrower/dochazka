@@ -3,6 +3,7 @@ import { BarlowCondensed_700Bold, BarlowCondensed_800ExtraBold } from '@expo-goo
 import { useFonts } from 'expo-font';
 import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import Storage from 'expo-sqlite/kv-store';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useState } from 'react';
 import { AppState } from 'react-native';
@@ -15,9 +16,11 @@ import '@/lib/backgroundTasks';
 
 import IntroAnimation from '@/components/IntroAnimation';
 import KeyboardDoneAccessory from '@/components/KeyboardDoneAccessory';
-import { colors } from '@/theme';
-import { initDb } from '@/lib/db';
+import { colors, FONT_SCALE_STORAGE_KEY } from '@/theme';
+import { backupBeforeMigration } from '@/lib/backup';
+import { getSettings, initDb, setPreMigrationHook } from '@/lib/db';
 import { initLocationTracking } from '@/lib/locationTracking';
+import { setNavigationReady } from '@/lib/reminders';
 import { finishLegacyVisitMigrationIfNeeded } from '@/lib/visits';
 
 export {
@@ -53,6 +56,20 @@ SplashScreen.preventAutoHideAsync();
 // se nespouští (a nikdy by ji nikdo neviděl).
 const launchedInForeground = AppState.currentState !== 'background';
 
+// Etapa 4: před každou migrací DB i šifrovaná záloha do složky v Souborech.
+setPreMigrationHook(backupBeforeMigration);
+
+// Velikost písma se čte synchronně z kv-store (theme.ts) - po obnově
+// zálohy ji dorovnat z nastavení v DB (projeví se při dalším startu).
+async function syncFontScaleStorage(): Promise<void> {
+  try {
+    const { fontScale } = await getSettings();
+    if (Storage.getItemSync(FONT_SCALE_STORAGE_KEY) !== fontScale) Storage.setItemSync(FONT_SCALE_STORAGE_KEY, fontScale);
+  } catch {
+    // nevadí
+  }
+}
+
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     Barlow_400Regular,
@@ -70,6 +87,7 @@ export default function RootLayout() {
       // Oprava 2: přepočet pobytů po migraci - ještě před prvním
       // zobrazením, ať Detail dne neukáže staré (poškozené) pobyty.
       .then(() => finishLegacyVisitMigrationIfNeeded())
+      .then(() => syncFontScaleStorage())
       .then(() => setDbReady(true))
       // initLocationTracking je "best effort" - chyba v ní (např. appka
       // běží v Expo Go, kde nativní modul neexistuje) nesmí appce
@@ -85,6 +103,11 @@ export default function RootLayout() {
   }, [fontError, dbError]);
 
   const ready = fontsLoaded && dbReady;
+
+  // Navigace existuje -> "Upravit v aplikaci" z upozornění může otevřít den.
+  useEffect(() => {
+    if (ready) setNavigationReady();
+  }, [ready]);
 
   // S úvodní animací se nativní splash (statická značka na #131311)
   // schová hned po fontech - animace pak běží souběžně s načítáním DB.
@@ -119,6 +142,10 @@ export default function RootLayout() {
             <Stack.Screen name="settings/aplikace" />
             <Stack.Screen name="settings/debug-log" />
             <Stack.Screen name="settings/odberatele" />
+            <Stack.Screen name="settings/zaloha" />
+            <Stack.Screen name="settings/stav" />
+            <Stack.Screen name="settings/pripominky" />
+            <Stack.Screen name="settings/vykaz" />
           </Stack>
           {/* Globální "Hotovo" lišta nad číselnou klávesnicí (ČÁST 1 oprava) -
               mountuje se JEDNOU tady, viz components/KeyboardDoneAccessory.tsx. */}

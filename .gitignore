@@ -44,6 +44,7 @@ yarn-error.*
 # deníkem, exporty deníku, zálohy databáze, lokální testovací data)
 # se nesmí commitnout.
 ZADANI_OPRAVY*.md
+PLAN_DALSI_ETAPY*.md
 private/
 *.db
 *.db-wal
@@ -51,3 +52,6 @@ private/
 *.sqlite
 dochazka-ladici-denik*.txt
 *ladici-denik*
+/*@1x.png
+/*@2x.png
+/*@3x.png

@@ -12,8 +12,143 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Test v terénu proběhl 2.-4. 10. 2026.**
 **Oprava 2 (po terénním testu etapy 2) - HOTOVO (skupiny A-F), build OVĚŘEN (run 37210061504, 13m21s, všechny kroky zelené vč. Swift modulu, `.ipa` ~15 MB). Čeká na test v telefonu - viz "Co otestovat v telefonu (oprava 2)".**
 
+**Etapa 4 (záloha, stav záznamu, připomenutí, výkaz pro šéfa) - HOTOVO, viz sekce "Etapa 4" níž; čeká na build a test.**
+**Plán etap 4-8: `PLAN_DALSI_ETAPY.md` (jen lokálně, v `.gitignore`), grafické předlohy v `private/` (predloha-pripominka.html, predloha-zakazky.html).**
 **Etapa 3 (přejezdy, trasy, km, mapa) + ikona, logo a úvodní animace - HOTOVO, build OVĚŘEN (run 37218589500, 15m34s, vše zelené vč. react-native-maps a react-native-svg, `.ipa` ~15 MB). Čeká na test v terénu - viz "Etapa 3 - co testovat v terénu".**
 - Etapa 4 (export, záloha) - nezačato.
+
+## Etapa 4 - záloha, stav záznamu, připomenutí, výkaz pro šéfa
+
+### Bezplatné Apple ID - co a proč jinak
+
+- **Vlastní místní upozornění místo `expo-notifications`** - jeho config
+  plugin přidává oprávnění pro push (`aps-environment`), které bezplatný
+  podpis nepodporuje. Místní upozornění žádné oprávnění nepotřebují.
+- **iCloud Klíčenka**: klíč zálohy je `kSecAttrSynchronizable` (žádné
+  placené oprávnění; přepodepsání stejným Apple ID = stejný tým = klíč
+  čitelný). Skutečnou synchronizaci NEJDE ověřit (uživatel nemá druhé
+  zařízení) -> **obnovovací klíč je hlavní pojistka**.
+- **Složka v iCloud Drive** přes výběr v Souborech + security-scoped
+  bookmark - bez oprávnění pro iCloud. Každý pokus o zálohu se zapíše do
+  deníku (ZÁLOHA OK/SELHALA, v popředí / na pozadí) = zároveň pokus pro
+  etapu 8 (zápis do iCloud Drive na pozadí s bezplatným podpisem).
+
+### Nativní modul `modules/dochazka-native` (Swift 5.9)
+
+- `BackupVault.swift` - složka (bookmark v UserDefaults, zápis/čtení přes
+  `NSFileCoordinator`), AES-256-GCM (CryptoKit; soubor = "DOCHZK01" +
+  `SealedBox.combined`), klíč v Klíčence (`AfterFirstUnlock` +
+  `Synchronizable`, když synchronizovatelný nejde uložit, tak místní),
+  datum vypršení podpisu z `embedded.mobileprovision`.
+- `LocalNotifications.swift` - upozornění s akcemi. NETRIVIÁLNÍ
+  ROZHODNUTÍ: odpovědi (i akce, kvůli které iOS appku spustí na pozadí)
+  jdou do fronty v UserDefaults a JS si je vyzvedne (`drainNotification
+  Responses`) - stejný vzor jako fronta CLVisit. Delegate nastavuje
+  `DochazkaNotificationsSubscriber` (AppDelegate subscriber) hned při
+  startu procesu, jinak by se odpověď při studeném startu ztratila. Text
+  tlačítek je u iOS součástí kategorie -> každé upozornění s textem
+  "Zapsat: Bagr 7,5 h" má vlastní kategorii (všechny v UserDefaults).
+- `MapSnapshot.swift` - snímek Apple Maps s trasou pro PDF (bez internetu
+  chyba -> trasa v SVG bez podkladu).
+- Místní soubory: dočasné cesty, nahrazení souboru DB při obnově.
+
+### 4.1 Záloha (`lib/backup.ts`, `lib/backupKey.ts`, Nastavení -> Záloha)
+
+- `Dochazka-zaloha-RRRR-MM-DD.dochazka` = šifrovaný snímek celé DB
+  (`VACUUM INTO`, včetně nastavení). Automaticky max. 1× denně při startu
+  appky i při probuzení polohou (proces na pozadí žije dny -> kontrola i
+  po každém zpracování událostí), po chybě nejdřív za hodinu; před každou
+  migrací DB `Dochazka-pred-migraci-vN-…` (hook `setPreMigrationHook`,
+  rotace je nemaže); "Zálohovat teď".
+- Rotace 7 denních / 4 týdenní / 12 měsíčních (`backupsToDelete`, testované).
+- Obnovovací klíč: 32 B -> base32 ve skupinách po 4 + QR
+  (`DOCHAZKA-KEY:…`), Kopírovat / Sdílet / Tisk; ukáže se při nastavení.
+- Obnova: soubor ze složky nebo z Souborů (nový telefon) -> dešifrování
+  do dočasné DB -> náhled (období, dny, položky, místa, pobyty) -> záloha
+  aktuálního stavu -> zavřít DB, nahradit soubor, `reloadAppAsync`
+  (migrace proběhnou při startu). Bez klíče v Klíčence se zeptá na
+  obnovovací klíč a uloží ho zpět do Klíčenky. Bookmark složky a klíč
+  jsou mimo DB - obnova je nepřepíše. Velikost písma se po obnově
+  dorovná z nastavení v DB (`syncFontScaleStorage`).
+- Kalendář: na čerstvé instalaci (prázdná DB, bez zálohy) karta "Máš
+  zálohu z jiného telefonu? OBNOVIT / Ne, začít znovu".
+
+### 4.2 Stav záznamu (`lib/health.ts`, Nastavení -> Stav záznamu)
+
+Poloha "Vždy", přesná poloha, režim nízké spotřeby, aktualizace na
+pozadí, podpis appky (< 2 dny = problém), záloha (nenastavená / složka
+nedostupná / > 7 dní), dnes žádná událost polohy (po 3 h časového okna
+v pracovní den), upozornění nepovolená (když jsou připomenutí zapnutá).
+Proužek v kalendáři (žlutý pozor / červený problém) -> Stav záznamu;
+vážné problémy = místní upozornění max. 1× denně na problém.
+
+### 4.3 Připomenutí (`lib/reminders.ts`, `lib/stayProposal.ts`, `components/StaySheet.tsx`)
+
+- NETRIVIÁLNÍ ROZHODNUTÍ - "požadovaný stav" upozornění na dnešek se
+  spočítá znovu po každém přepočtu pobytů, po zápisu a při startu
+  (`evaluateReminders`) a sladí se s naplánovanými (naplánovat /
+  přeplánovat / zrušit; stav v `reminder_state`).
+- Pobyt = pracovní místo za den (víc pobytů sečteno); zapsaný = zápis s
+  `place_id` toho místa v ten den. Nikdy soukromá ani neznámá místa,
+  jen v časovém okně, volitelně jen pracovní dny.
+- Odjezd (pobyt >= 30 min, upozornění za 10 min, návrat = zrušit), doma
+  (jedno upozornění se všemi nezapsanými), večer (jen když něco chybí);
+  akce Zapsat (uloží bez otevření appky, `source = 'reminder'`) / Upravit
+  v aplikaci (Detail dne `?stay=<místo>` -> okno Zapsat pobyt) /
+  Připomenout večer / Dnes nezapisovat.
+- Návrh: stroj zamčený pro místo (`place_suggestions`) -> naučený
+  (nejčastější z posledních 30 zápisů u místa) -> první výchozí položka
+  -> první stroj; hodiny = délka − přestávka, zaokrouhleno (na nejbližší
+  krok - v předloze je u 8 h 15 min − 30 min "7,5 h", appka dá 8 h).
+- Okno "Zapsat pobyt" přesně podle předlohy (rozměry z HTML, písma a
+  barvy z theme): čipy (navržený první, "+ Další"), hodnota s +/− (dá se
+  i přepsat), vysvětlení, "<stroj> nabízet pro toto místo" (zamčení),
+  ULOŽIT, "Rozdělit na víc strojů". V Detailu dne odkaz "Zapsat pobyt ›"
+  u nezapsaného pracovního pobytu.
+
+### 4.4 Výkaz pro šéfa (`lib/report.ts`, Nastavení -> Výkaz pro šéfa)
+
+Období (týden, měsíc, vlastní), místa (zakázky až v etapě 5), volby s
+cenami / s mapou tras (PDF; Apple Maps snímek, offline SVG) / podrobně
+(pobyty, přejezdy, poznámky) / podpis prstem (`components/SignaturePad
+.tsx`, SVG cesta). PDF přes `expo-print`, skutečné XLSX (vlastní zápis
+OOXML + `fflate`) a CSV (středník, UTF-8 BOM), Sdílet. Hlavička: logo +
+Moje údaje (nová obrazovka místo "Připravujeme"). **Soukromá místa a
+jízdy se nikdy nevypíšou; body tras do poloměru + 300 m od soukromých
+míst se z mapy ořežou.**
+
+### Migrace v4 (`user_version` 3 -> 4)
+
+`day_work_records.place_id` (+ index), tabulky `place_suggestions` a
+`reminder_state`, nové klíče nastavení (připomenutí, Moje údaje). Záloha
+`dochazka-zaloha-pred-etapou-4.db` + šifrovaná do složky (když je
+nastavená). Ověřeno lokálně z v0 i z v3. (Oprava: název zálohy před
+migrací = cílová verze, `…pred-etapou-${from + 1}`.)
+
+### Etapa 4 - co testovat
+
+1. **Záloha:** Nastavení -> Záloha -> VYBRAT SLOŽKU (iCloud Drive ->
+   nová složka Docházka) -> obnovovací klíč ULOŽIT (Hesla/tisk) -> v
+   Souborech se objeví `Dochazka-zaloha-…dochazka`. Další den: v deníku
+   ZÁLOHA OK - **hlavně "na pozadí"** (probuzení polohou) - a soubor s
+   novým datem. Pokud SELHALA, pošli export deníku.
+2. **Obnova (opatrně):** Obnovit u dnešní zálohy -> náhled sedí ->
+   Nahradit -> appka se znovu načte a data jsou stejná. (Před obnovou se
+   udělá záloha `Dochazka-pred-migraci-pred-obnovou-…`.)
+3. **Stav záznamu:** vypni na chvíli "Vždy" / zapni úsporný režim ->
+   proužek v kalendáři a položka v Stavu záznamu; podpis appky ukazuje
+   datum vypršení.
+4. **Připomenutí:** Zápisy -> Připomenutí zapnout (povolit upozornění).
+   Odjeď ze stavby po > 30 min -> za 10 min upozornění s návrhem;
+   podržet -> "Zapsat: …" (zápis vznikne bez otevření appky) / Upravit
+   v aplikaci (otevře okno Zapsat pobyt) / Připomenout večer / Dnes
+   nezapisovat. Vrátit se na stavbu do 10 min = upozornění nepřijde.
+   Doma: souhrn nezapsaných. Večer: souhrn jen když něco chybí.
+5. **Zapsat pobyt** (Detail dne -> "Zapsat pobyt ›"): čipy, +/−,
+   zamknout stroj pro místo, rozdělit na víc strojů.
+6. **Výkaz:** Moje údaje vyplnit -> Výkaz -> Minulý měsíc -> PDF (s
+   cenami, s mapou, podrobně, podpis) -> Sdílet; XLSX otevřít v
+   Excelu/Numbers. Ověř, že domov a soukromé jízdy ve výkazu nejsou.
 
 ## Etapa 3 - přejezdy, trasy, kilometry, mapa
 

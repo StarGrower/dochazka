@@ -10,7 +10,7 @@ import { useCallback, useState } from 'react';
 import { FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { SymbolView } from 'expo-symbols';
-import { useFocusEffect } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
@@ -160,6 +160,11 @@ export default function ZapisySettingsScreen() {
               value={settings.dayNoteRequired}
               onValueChange={(v) => patch({ dayNoteRequired: v })}
             />
+
+            <TouchableOpacity style={styles.row} onPress={() => router.push('/settings/pripominky')}>
+              <Text style={styles.label}>Připomenutí zápisu</Text>
+              <Text style={styles.unit}>po odjezdu, doma, večer ›</Text>
+            </TouchableOpacity>
 
             <Text style={styles.sectionHeader}>PŘÍPLATKY (VÝCHOZÍ PRO VŠECHNY STROJE)</Text>
             <Text style={styles.sectionDescription}>

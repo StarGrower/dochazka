@@ -27,6 +27,7 @@ import BottomSheetModal from '@/components/BottomSheetModal';
 import DayMap, { type DayMapRoute, type DayMapStop } from '@/components/DayMap';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
+import StaySheet, { type StayRow, type StaySheetTarget } from '@/components/StaySheet';
 import TripSheet, { type TripEdit } from '@/components/TripSheet';
 import WorkItemSheet, { type WorkItemSheetMode } from '@/components/WorkItemSheet';
 import {
@@ -42,6 +43,8 @@ import {
   getVisitsForDay,
   listCategories,
   listRoutePointsForTrips,
+  recordedPlacesForDate,
+  setPlaceSuggestionLock,
   setDayNote,
   setTripsWorkRecord,
   updateDayRecord,
@@ -63,6 +66,8 @@ import { geocodeKey, nearLocalityLabel, resolveLocalities } from '@/lib/geocode'
 import { holidayName, isWeekend } from '@/lib/holidays';
 import { tripKm } from '@/lib/tripPlan';
 import type { AppSettings, DayWorkRecordWithCategory, RateUnit, RoutePoint, Trip, VisitWithPlace, WorkCategory } from '@/lib/types';
+import { evaluateRemindersSafe, proposalForStay, workStaysForDate } from '@/lib/reminders';
+import { formatDurationHM } from '@/lib/stayProposal';
 import { refreshTrips } from '@/lib/visits';
 import {
   applyRounding,
@@ -117,7 +122,8 @@ function stayTimeLabel(stay: TimelineStay<VisitWithPlace>): string {
 
 export default function DayDetailScreen() {
   // `add=1` - otevřeno z "+ ZAPSAT DNEŠEK" (kalendář): rovnou nabídnout přidání.
-  const { date, add } = useLocalSearchParams<{ date: string; add?: string }>();
+  // `stay=<placeId>` - "Upravit v aplikaci" z připomenutí: otevřít okno Zapsat pobyt.
+  const { date, add, stay } = useLocalSearchParams<{ date: string; add?: string; stay?: string }>();
 
   const [records, setRecords] = useState<DayWorkRecordWithCategory[]>([]);
   const [note, setNote] = useState('');
@@ -135,6 +141,9 @@ export default function DayDetailScreen() {
   const [tripPoints, setTripPoints] = useState<Map<number, RoutePoint[]>>(new Map());
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [tripEditTarget, setTripEditTarget] = useState<Trip | null>(null);
+  const [recordedPlaces, setRecordedPlaces] = useState<Set<number>>(new Set());
+  const [staySheetTarget, setStaySheetTarget] = useState<StaySheetTarget | null>(null);
+  const [stayParamDone, setStayParamDone] = useState(false);
 
   const load = useCallback(async () => {
     if (!date) return;
@@ -148,6 +157,7 @@ export default function DayDetailScreen() {
     ]);
     setTrips(t);
     setTripPoints(await listRoutePointsForTrips(t.map((trip) => trip.id)));
+    setRecordedPlaces(await recordedPlacesForDate(date));
     setSettings(s);
     setRecords(r);
     setNote(n);
@@ -485,6 +495,59 @@ export default function DayDetailScreen() {
     return `${msToHHMM(Date.parse(trip.startAt))}–${msToHHMM(Date.parse(trip.endAt))} · ${nameOf(trip.fromPlaceId)} → ${nameOf(trip.toPlaceId)}`;
   };
 
+  // --- zápis pobytu (etapa 4.3, okno podle předlohy) ---
+
+  const openStaySheet = useCallback(
+    async (placeId: number) => {
+      if (!date || !settings) return;
+      const stay = (await workStaysForDate(date)).find((s) => s.placeId === placeId);
+      if (!stay) return;
+      const proposal = await proposalForStay(stay, settings, categories);
+      if (!proposal) return;
+      const timeline = buildDayTimeline(visits, date, Date.now()).filter((i) => i.kind === 'stay');
+      const badgeIndex = timeline.findIndex((i) => i.kind === 'stay' && i.visit.placeId === placeId);
+      const end = stay.lastEndMs === null ? 'teď' : msToHHMM(stay.lastEndMs);
+      setStaySheetTarget({
+        placeId,
+        placeName: stay.placeName,
+        badge: String(badgeIndex + 1),
+        timeLabel: `${msToHHMM(stay.firstStartMs)}–${end} · ${formatDurationHM(stay.durationMs)}`,
+        proposal,
+      });
+    },
+    [date, settings, categories, visits]
+  );
+
+  useEffect(() => {
+    if (stay && settings && visits.length > 0 && !stayParamDone) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setStayParamDone(true);
+      openStaySheet(Number(stay));
+    }
+  }, [stay, settings, visits, stayParamDone, openStaySheet]);
+
+  const handleSaveStay = async (target: StaySheetTarget, rows: StayRow[], lockFirst: boolean) => {
+    if (!date || !settings) return;
+    for (const row of rows) {
+      const category = categoryById.get(row.categoryId);
+      if (!category) continue;
+      await addDayRecord({
+        date,
+        categoryId: category.id,
+        quantity: row.quantity,
+        unit: row.unit,
+        ...priceForRecord(date, category, row.unit, settings),
+        source: 'manual',
+        placeId: target.placeId,
+      });
+    }
+    if (rows.length > 0) await setPlaceSuggestionLock(target.placeId, rows[0].categoryId, rows[0].unit, lockFirst);
+    setStaySheetTarget(null);
+    await load();
+    // Pobyt je zapsaný -> zrušit jeho připomenutí.
+    evaluateRemindersSafe();
+  };
+
   // --- poznámka ---
 
   const saveNote = async () => {
@@ -639,6 +702,11 @@ export default function DayDetailScreen() {
                           </Text>
                         </TouchableOpacity>
                       )}
+                      {visit.placeId !== null && !visit.placeIsPrivate && !recordedPlaces.has(visit.placeId) && (
+                        <TouchableOpacity onPress={() => openStaySheet(visit.placeId as number)} hitSlop={8}>
+                          <Text style={styles.saveAsPlaceLink}>Zapsat pobyt ›</Text>
+                        </TouchableOpacity>
+                      )}
                       {visit.placeId === null && (
                         <TouchableOpacity onPress={() => handleSaveUnknownAsPlace(visit)} hitSlop={8}>
                           <Text style={styles.saveAsPlaceLink}>Uložit jako nové místo</Text>
@@ -725,6 +793,14 @@ export default function DayDetailScreen() {
         onAddDefaults={handleAddDefaults}
         onSave={handleSaveRecord}
         onDelete={handleDeleteRecord}
+      />
+
+      <StaySheet
+        target={staySheetTarget}
+        categories={categories}
+        settings={settings}
+        onClose={() => setStaySheetTarget(null)}
+        onSave={handleSaveStay}
       />
 
       <TripSheet

@@ -60,7 +60,7 @@ function getDb(): Promise<SQLite.SQLiteDatabase> {
   return dbPromise;
 }
 
-const DEFAULT_CATEGORIES: Array<{ name: string; rateType: RateType; kind: CategoryKind }> = [
+const DEFAULT_CATEGORIES: { name: string; rateType: RateType; kind: CategoryKind }[] = [
   { name: 'Tatra', rateType: 'hourly', kind: 'machine' },
   { name: 'Bagr', rateType: 'hourly', kind: 'machine' },
   { name: 'Ruční práce', rateType: 'hourly', kind: 'labor' },
@@ -218,11 +218,22 @@ async function migrateAddCategoryKind(db: SQLite.SQLiteDatabase): Promise<void> 
 // telefonu se nesmí ztratit". Migrace samy nic fyzicky nemažou (jen
 // is_deleted / přesun do *_removed tabulek).
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 // Záloha se dělá před první čekající migrací; jméno podle verze, ze které
 // se migruje (existující záloha se nikdy nepřepisuje).
 function backupFileName(fromVersion: number): string {
-  return fromVersion < 2 ? 'dochazka-zaloha-pred-opravami-2.db' : 'dochazka-zaloha-pred-etapou-3.db';
+  if (fromVersion < 2) return 'dochazka-zaloha-pred-opravami-2.db';
+  // v2 -> "před etapou 3", v3 -> "před etapou 4" (verze DB = číslo etapy)
+  return `dochazka-zaloha-pred-etapou-${fromVersion + 1}.db`;
+}
+
+// Etapa 4: před migrací navíc šifrovaná záloha do složky v Souborech
+// (lib/backup.ts se zaregistruje z app/_layout.tsx - datová vrstva o
+// zálohování nic neví, jen dá vědět).
+let preMigrationHook: ((db: SQLite.SQLiteDatabase, fromVersion: number) => Promise<void>) | null = null;
+
+export function setPreMigrationHook(hook: (db: SQLite.SQLiteDatabase, fromVersion: number) => Promise<void>): void {
+  preMigrationHook = hook;
 }
 
 async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: boolean): Promise<void> {
@@ -230,7 +241,10 @@ async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: 
   const version = row?.user_version ?? 0;
   if (version >= SCHEMA_VERSION) return;
 
-  if (hadExistingDb) await backupDatabase(db, version);
+  if (hadExistingDb) {
+    await backupDatabase(db, version);
+    await preMigrationHook?.(db, version).catch(() => {});
+  }
 
   if (version < 1) {
     await migrateV1LocationEvents(db);
@@ -243,6 +257,10 @@ async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: 
   if (version < 3) {
     await migrateV3Trips(db);
     await db.execAsync('PRAGMA user_version = 3');
+  }
+  if (version < 4) {
+    await migrateV4Reminders(db);
+    await db.execAsync('PRAGMA user_version = 4');
   }
 }
 
@@ -506,6 +524,31 @@ async function migrateV3Trips(db: SQLite.SQLiteDatabase): Promise<void> {
   await setInternalValueWith(db, KEY_TRIPS_BACKFILL_PENDING, '1');
 }
 
+// Etapa 4 - připomenutí zápisu a učení stroje pro místo. Jen nové
+// sloupce/tabulky, existující data beze změny.
+async function migrateV4Reminders(db: SQLite.SQLiteDatabase): Promise<void> {
+  await addColumnIfMissing(db, 'day_work_records', 'place_id', 'INTEGER');
+  await db.execAsync(`
+    CREATE INDEX IF NOT EXISTS idx_day_work_records_place ON day_work_records (place_id);
+
+    CREATE TABLE IF NOT EXISTS place_suggestions (
+      place_id INTEGER PRIMARY KEY NOT NULL,
+      category_id INTEGER NOT NULL,
+      unit TEXT NOT NULL DEFAULT 'hour',
+      locked INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS reminder_state (
+      key TEXT PRIMARY KEY NOT NULL,
+      state TEXT NOT NULL,
+      fire_at TEXT,
+      payload TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    );
+  `);
+}
+
 export function normalizeIso(value: string): string {
   const ms = Date.parse(value);
   return Number.isNaN(ms) ? value : new Date(ms).toISOString();
@@ -618,6 +661,7 @@ interface DayWorkRecordRow {
   rate_kc: number;
   surcharge_pct: number;
   source: DayRecordSource;
+  place_id: number | null;
   category_name: string;
   is_deleted: number;
   color: string;
@@ -628,6 +672,7 @@ function mapDayWorkRecord(row: DayWorkRecordRow): DayWorkRecordWithCategory {
     id: row.id,
     date: row.date,
     categoryId: row.category_id,
+    placeId: row.place_id,
     quantity: row.quantity,
     unit: row.unit,
     rateKc: row.rate_kc,
@@ -642,7 +687,7 @@ function mapDayWorkRecord(row: DayWorkRecordRow): DayWorkRecordWithCategory {
 export async function getDayRecords(date: string): Promise<DayWorkRecordWithCategory[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<DayWorkRecordRow>(
-    `SELECT r.id, r.date, r.category_id, r.quantity, r.unit, r.rate_kc, r.surcharge_pct, r.source,
+    `SELECT r.id, r.date, r.category_id, r.quantity, r.unit, r.rate_kc, r.surcharge_pct, r.source, r.place_id,
             c.name as category_name, c.is_deleted, c.color
      FROM day_work_records r
      JOIN work_categories c ON c.id = r.category_id
@@ -664,12 +709,13 @@ export async function addDayRecord(record: {
   surchargePct: number;
   source: DayRecordSource;
   tripId?: number | null;
+  placeId?: number | null;
 }): Promise<number> {
   const db = await getDb();
   const result = await db.runAsync(
-    `INSERT INTO day_work_records (date, category_id, quantity, unit, rate_kc, surcharge_pct, source, trip_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [record.date, record.categoryId, record.quantity, record.unit, record.rateKc, record.surchargePct, record.source, record.tripId ?? null]
+    `INSERT INTO day_work_records (date, category_id, quantity, unit, rate_kc, surcharge_pct, source, trip_id, place_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [record.date, record.categoryId, record.quantity, record.unit, record.rateKc, record.surchargePct, record.source, record.tripId ?? null, record.placeId ?? null]
   );
   return result.lastInsertRowId;
 }
@@ -767,6 +813,19 @@ const SETTINGS_KEYS: { [K in keyof AppSettings]: string } = {
   trackingStartMinutes: 'tracking_start_minutes',
   trackingEndMinutes: 'tracking_end_minutes',
   minStayMinutes: 'min_stay_minutes',
+  reminderOnDeparture: 'reminder_on_departure',
+  reminderMinStayMinutes: 'reminder_min_stay_minutes',
+  reminderDelayMinutes: 'reminder_delay_minutes',
+  reminderOnArriveHome: 'reminder_on_arrive_home',
+  reminderEvening: 'reminder_evening',
+  reminderEveningMinutes: 'reminder_evening_minutes',
+  remindersOnlyWorkdays: 'reminders_only_workdays',
+  profileName: 'profile_name',
+  profileIco: 'profile_ico',
+  profileDic: 'profile_dic',
+  profileAddress: 'profile_address',
+  profilePhone: 'profile_phone',
+  profileEmail: 'profile_email',
   routeTrackingEnabled: 'route_tracking_enabled',
   routeQuality: 'route_quality',
   minTripMeters: 'min_trip_meters',
@@ -779,7 +838,7 @@ export async function getSettings(): Promise<AppSettings> {
   const stored = new Map(rows.map((r) => [r.key, r.value]));
 
   const result = { ...DEFAULT_SETTINGS };
-  for (const field of Object.keys(SETTINGS_KEYS) as Array<keyof AppSettings>) {
+  for (const field of Object.keys(SETTINGS_KEYS) as (keyof AppSettings)[]) {
     const raw = stored.get(SETTINGS_KEYS[field]);
     if (raw === undefined) continue;
     try {
@@ -793,7 +852,7 @@ export async function getSettings(): Promise<AppSettings> {
 
 export async function updateSettings(partial: Partial<AppSettings>): Promise<void> {
   const db = await getDb();
-  for (const [field, value] of Object.entries(partial) as Array<[keyof AppSettings, unknown]>) {
+  for (const [field, value] of Object.entries(partial) as [keyof AppSettings, unknown][]) {
     await db.runAsync(
       `INSERT INTO settings (key, value) VALUES (?, ?)
        ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
@@ -835,6 +894,8 @@ export async function wipeAllData(): Promise<void> {
     DELETE FROM day_work_records_removed;
     DELETE FROM trips;
     DELETE FROM route_points;
+    DELETE FROM place_suggestions;
+    DELETE FROM reminder_state;
   `);
   await seedDefaultCategories(db);
 }
@@ -1041,7 +1102,7 @@ export interface DerivedVisit {
 export async function replaceDerivedVisits(
   fromIso: string | null,
   visits: DerivedVisit[],
-  manualEnds: Array<{ id: number; endAt: string }>
+  manualEnds: { id: number; endAt: string }[]
 ): Promise<void> {
   const db = await getDb();
   await db.withExclusiveTransactionAsync(async (txn) => {
@@ -1273,12 +1334,12 @@ function computedParams(t: TripComputedFields): (string | number | null)[] {
 // se k přejezdu přiřadí podle času (okno přejezdu ± 2 min).
 export async function applyTripPlan(plan: {
   inserts: TripComputedFields[];
-  updates: Array<{ id: number; fields: TripComputedFields; revive: boolean }>;
+  updates: { id: number; fields: TripComputedFields; revive: boolean }[];
   removals: number[];
 }): Promise<void> {
   const db = await getDb();
   await db.withExclusiveTransactionAsync(async (txn) => {
-    const assigned: Array<{ id: number; t: TripComputedFields }> = [];
+    const assigned: { id: number; t: TripComputedFields }[] = [];
     for (const u of plan.updates) {
       await txn.runAsync(
         `UPDATE trips SET start_at = ?, end_at = ?, from_place_id = ?, from_latitude = ?, from_longitude = ?,
@@ -1436,6 +1497,136 @@ export async function listRoutePointsForTrips(tripIds: number[]): Promise<Map<nu
     result.set(r.trip_id, list);
   }
   return result;
+}
+
+// --- zápis pobytů, učení a připomenutí (etapa 4.3) ---
+
+// Místa, ke kterým už v daný den existuje zápis (pobyt = zapsaný).
+export async function recordedPlacesForDate(date: string): Promise<Set<number>> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ place_id: number }>(
+    'SELECT DISTINCT place_id FROM day_work_records WHERE date = ? AND place_id IS NOT NULL',
+    [date]
+  );
+  return new Set(rows.map((r) => r.place_id));
+}
+
+export interface PlaceSuggestion {
+  categoryId: number;
+  unit: RateUnit;
+  locked: boolean;
+}
+
+// Návrh stroje pro místo: zamčený ručně, jinak nejčastější stroj z
+// posledních 30 zápisů u toho místa (appka se učí ze zápisů), jinak null.
+export async function getPlaceSuggestion(placeId: number): Promise<PlaceSuggestion | null> {
+  const db = await getDb();
+  const locked = await db.getFirstAsync<{ category_id: number; unit: RateUnit }>(
+    `SELECT s.category_id, s.unit FROM place_suggestions s
+     JOIN work_categories c ON c.id = s.category_id AND c.is_deleted = 0
+     WHERE s.place_id = ? AND s.locked = 1`,
+    [placeId]
+  );
+  if (locked) return { categoryId: locked.category_id, unit: locked.unit, locked: true };
+  const learned = await db.getFirstAsync<{ category_id: number; unit: RateUnit }>(
+    `SELECT r.category_id, r.unit FROM (
+       SELECT category_id, unit FROM day_work_records WHERE place_id = ? ORDER BY id DESC LIMIT 30
+     ) r JOIN work_categories c ON c.id = r.category_id AND c.is_deleted = 0
+     GROUP BY r.category_id, r.unit ORDER BY COUNT(*) DESC LIMIT 1`,
+    [placeId]
+  );
+  return learned ? { categoryId: learned.category_id, unit: learned.unit, locked: false } : null;
+}
+
+export async function setPlaceSuggestionLock(placeId: number, categoryId: number, unit: RateUnit, locked: boolean): Promise<void> {
+  const db = await getDb();
+  if (!locked) {
+    await db.runAsync('DELETE FROM place_suggestions WHERE place_id = ?', [placeId]);
+    return;
+  }
+  await db.runAsync(
+    `INSERT INTO place_suggestions (place_id, category_id, unit, locked, updated_at) VALUES (?, ?, ?, 1, ?)
+     ON CONFLICT (place_id) DO UPDATE SET category_id = excluded.category_id, unit = excluded.unit, locked = 1,
+       updated_at = excluded.updated_at`,
+    [placeId, categoryId, unit, new Date().toISOString()]
+  );
+}
+
+export interface ReminderState {
+  key: string;
+  state: 'scheduled' | 'sent' | 'evening' | 'dismissed';
+  fireAt: string | null;
+  payload: string;
+}
+
+export async function listReminderStates(keyPrefix: string): Promise<ReminderState[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ key: string; state: ReminderState['state']; fire_at: string | null; payload: string }>(
+    'SELECT key, state, fire_at, payload FROM reminder_state WHERE key LIKE ?',
+    [`${keyPrefix}%`]
+  );
+  return rows.map((r) => ({ key: r.key, state: r.state, fireAt: r.fire_at, payload: r.payload }));
+}
+
+export async function setReminderState(key: string, state: ReminderState['state'], fireAt: string | null, payload = ''): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO reminder_state (key, state, fire_at, payload, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (key) DO UPDATE SET state = excluded.state, fire_at = excluded.fire_at, payload = excluded.payload,
+       updated_at = excluded.updated_at`,
+    [key, state, fireAt, payload, new Date().toISOString()]
+  );
+}
+
+export async function deleteReminderState(key: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM reminder_state WHERE key = ?', [key]);
+}
+
+// Poslední zachycená událost polohy (Stav záznamu, 4.2).
+export async function getLastLocationEventAt(): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ event_at: string }>('SELECT event_at FROM location_events ORDER BY event_at DESC LIMIT 1');
+  return row?.event_at ?? null;
+}
+
+export async function countLocationEventsBetween(fromIso: string, toIso: string): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ c: number }>(
+    'SELECT COUNT(*) as c FROM location_events WHERE event_at >= ? AND event_at <= ?',
+    [fromIso, toIso]
+  );
+  return row?.c ?? 0;
+}
+
+// --- záloha a obnova (etapa 4.1) ---
+
+// Konzistentní snímek celé DB do souboru (VACUUM INTO).
+export async function snapshotDatabaseTo(path: string, db?: SQLite.SQLiteDatabase): Promise<void> {
+  const target = db ?? (await getDb());
+  await target.execAsync(`VACUUM INTO '${path.replace(/'/g, "''")}'`);
+}
+
+export async function getDatabasePath(): Promise<string> {
+  return (await getDb()).databasePath;
+}
+
+// Před nahrazením souboru databáze při obnově (pak se appka znovu načte).
+export async function closeDatabaseForRestore(): Promise<void> {
+  if (!dbPromise) return;
+  const db = await dbPromise;
+  await db.closeAsync();
+  dbPromise = null;
+}
+
+// Je databáze prakticky prázdná (čerstvá instalace)? - nabídka obnovy.
+export async function isDatabaseEmpty(): Promise<boolean> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ records: number; places: number; visits: number }>(
+    `SELECT (SELECT COUNT(*) FROM day_work_records) as records, (SELECT COUNT(*) FROM places) as places,
+            (SELECT COUNT(*) FROM visits) as visits`
+  );
+  return !row || (row.records === 0 && row.places === 0 && row.visits === 0);
 }
 
 // --- cache názvů obcí (oprava 2, F1/F2) ---

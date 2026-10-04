@@ -9,7 +9,7 @@ export type RateUnit = 'hour' | 'day' | 'km';
 
 // Původ položky dne (B2): ruční zápis, potvrzený návrh výchozích
 // položek, nebo potvrzený návrh z pobytů.
-export type DayRecordSource = 'manual' | 'default' | 'suggestion' | 'trip';
+export type DayRecordSource = 'manual' | 'default' | 'suggestion' | 'trip' | 'reminder';
 
 // ČÁST 3 (zadání "typ stroj/práce") - čistě informační rozlišení, na
 // nic jiného (geometrii/cenu) nemá vliv - jen jiná ikona v Nastavení.
@@ -34,6 +34,7 @@ export interface DayWorkRecord {
   id: number;
   date: string; // YYYY-MM-DD
   categoryId: number;
+  placeId: number | null; // místo, ke kterému zápis patří (zápis pobytu, etapa 4)
   quantity: number; // v jednotce `unit`
   unit: RateUnit;
   // Sazba a příplatek uložené v okamžiku zápisu (C1/C2) - pozdější
@@ -150,7 +151,9 @@ export type DebugEventType =
   | 'error'
   | 'trip_start'
   | 'trip_end'
-  | 'trip';
+  | 'trip'
+  | 'backup'
+  | 'reminder';
 
 export interface DebugLogEntry {
   id: number;
@@ -202,6 +205,21 @@ export interface AppSettings {
   trackingStartMinutes: number; // minut od půlnoci, např. 6:00 = 360
   trackingEndMinutes: number; // např. 19:00 = 1140
   minStayMinutes: number; // krátké pobyty pod tohle se ignorují
+  // --- Připomenutí zápisu (etapa 4.3) ---
+  reminderOnDeparture: boolean; // po odjezdu z pracovního místa
+  reminderMinStayMinutes: number; // jen po pobytu aspoň tak dlouhém
+  reminderDelayMinutes: number; // odeslat až po tolika minutách (návrat = zrušit)
+  reminderOnArriveHome: boolean; // po příjezdu domů souhrn nezapsaných pobytů
+  reminderEvening: boolean; // večerní souhrn (jen když něco chybí)
+  reminderEveningMinutes: number; // čas večerního souhrnu, minut od půlnoci
+  remindersOnlyWorkdays: boolean;
+  // --- Moje údaje (hlavička výkazu, etapa 4.4) ---
+  profileName: string;
+  profileIco: string;
+  profileDic: string;
+  profileAddress: string;
+  profilePhone: string;
+  profileEmail: string;
   // --- Trasy jízd (etapa 3) ---
   routeTrackingEnabled: boolean; // GPS během přejezdu (jen úsporný režim)
   routeQuality: RouteQuality;
@@ -234,6 +252,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
   trackingStartMinutes: 360, // 6:00
   trackingEndMinutes: 1140, // 19:00
   minStayMinutes: 10,
+  reminderOnDeparture: false,
+  reminderMinStayMinutes: 30,
+  reminderDelayMinutes: 10,
+  reminderOnArriveHome: false,
+  reminderEvening: false,
+  reminderEveningMinutes: 1140, // 19:00
+  remindersOnlyWorkdays: true,
+  profileName: '',
+  profileIco: '',
+  profileDic: '',
+  profileAddress: '',
+  profilePhone: '',
+  profileEmail: '',
   routeTrackingEnabled: true,
   routeQuality: 'economical',
   minTripMeters: 300,

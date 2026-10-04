@@ -22,7 +22,7 @@ const MAX_LOOKUPS_PER_CALL = 25;
 let inFlight: Promise<unknown> = Promise.resolve();
 
 // Vrátí mapu klíč -> název obce pro zadané body (z cache + nově dohledané).
-export function resolveLocalities(points: Array<{ latitude: number; longitude: number }>): Promise<Map<string, string>> {
+export function resolveLocalities(points: { latitude: number; longitude: number }[]): Promise<Map<string, string>> {
   // Jedno dohledávání najednou - dvě obrazovky by jinak dotazy zdvojily.
   const run = inFlight.then(async () => {
     const unique = new Map<string, { latitude: number; longitude: number }>();
@@ -56,7 +56,7 @@ export function resolveLocalities(points: Array<{ latitude: number; longitude: n
 export function nearLocalityLabel(locality: string): string {
   const name = locality.trim();
   if (name.includes(' ') || name.includes('-')) return name;
-  const rules: Array<[RegExp, string]> = [
+  const rules: [RegExp, string][] = [
     [/ice$/, 'ic'],
     [/any$/, 'an'],
     [/ov$/, 'ova'],

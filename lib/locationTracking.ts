@@ -7,7 +7,7 @@
 // lib/backgroundTasks.ts - ten na tyhle funkce jen volá.
 
 import * as Location from 'expo-location';
-import { Linking } from 'react-native';
+import { AppState, Linking } from 'react-native';
 
 import { getBatteryLevelSafe } from './battery';
 import {
@@ -23,6 +23,9 @@ import {
   type NewLocationEvent,
 } from './db';
 import { distanceMeters } from './geo';
+import { runDailyBackupIfDue } from './backup';
+import { evaluateHealthNotifications } from './health';
+import { evaluateReminders, initReminders, processNotificationResponses } from './reminders';
 import { evaluateTripSession, stopTripTrackingIfRunning } from './tripTracking';
 import { rebuildVisits, runExclusive } from './visits';
 import VisitMonitorModule from '../modules/visit-monitor/src/VisitMonitorModule';
@@ -213,6 +216,8 @@ async function ingest(items: IncomingEvent[]): Promise<void> {
   if (earliestMs !== null) await rebuildVisits(earliestMs);
   // Etapa 3: odjezd/příjezd -> zapnout/vypnout GPS jízdy.
   if (newest) await evaluateTripSession(TRIGGER_LABELS[newest.kind]);
+  // Etapa 4: připomenutí zápisu podle nového stavu pobytů.
+  if (earliestMs !== null) await evaluateReminders().catch(() => {});
 }
 
 // --- CLVisit a significant location change (nativní modul) ---
@@ -224,6 +229,13 @@ async function ingest(items: IncomingEvent[]): Promise<void> {
 // dalším startu appky zpracovala znovu (PŘÍJEZD 4× v deníku).
 
 export function processNativeQueue(): Promise<void> {
+  return drainAndIngestNativeQueue().then(() =>
+    // Proces na pozadí může žít dny - denní záloha i při probuzení polohou.
+    runDailyBackupIfDue(AppState.currentState === 'background' ? 'probuzení polohou' : 'událost polohy')
+  );
+}
+
+function drainAndIngestNativeQueue(): Promise<void> {
   return runExclusive(async () => {
     let pending: PendingEvent[];
     try {
@@ -420,4 +432,12 @@ export async function initLocationTracking(): Promise<void> {
   await applyLocationTrackingState(settings);
   // Dojela appka na pozadí jízdu, nebo se mezitím přijelo? (pojistky)
   await runExclusive(() => evaluateTripSession('start appky'));
+
+  // Etapa 4: odpovědi na upozornění (i akce, kvůli které iOS appku
+  // spustil na pozadí), připomenutí, denní záloha, kontrola stavu.
+  initReminders();
+  await processNotificationResponses().catch(() => {});
+  await runExclusive(() => evaluateReminders()).catch(() => {});
+  await runDailyBackupIfDue(AppState.currentState === 'background' ? 'probuzení na pozadí' : 'start appky');
+  await evaluateHealthNotifications().catch(() => {});
 }

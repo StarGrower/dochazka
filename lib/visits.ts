@@ -78,7 +78,7 @@ export async function rebuildVisits(fromMs: number | null): Promise<void> {
   );
 
   // 2) Otevřený ruční pobyt uzavře začátek dalšího automatického pobytu.
-  const manualEnds: Array<{ id: number; endAt: string }> = [];
+  const manualEnds: { id: number; endAt: string }[] = [];
   for (const m of manual) {
     if (m.endAt !== null) continue;
     const next = result.find((c) => c.startAt > m.startAt && !isSameLocation(m, c));

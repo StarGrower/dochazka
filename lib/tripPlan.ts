@@ -148,7 +148,7 @@ export interface ExistingTrip {
 
 export interface TripPlan {
   inserts: PlannedTrip[];
-  updates: Array<{ id: number; fields: PlannedTrip; revive: boolean }>;
+  updates: { id: number; fields: PlannedTrip; revive: boolean }[];
   removals: number[];
 }
 

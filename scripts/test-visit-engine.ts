@@ -7,7 +7,10 @@
 
 import assert from 'node:assert/strict';
 
+import { backupsToDelete, formatRecoveryKey, parseRecoveryKey } from '../lib/backupKey';
 import { buildDayTimeline } from '../lib/dayTimeline';
+import { proposeStayRecord } from '../lib/stayProposal';
+import { DEFAULT_SETTINGS, type WorkCategory } from '../lib/types';
 import { computeGapTrips, filterRoutePoints, matchTrips, type PlanVisit } from '../lib/tripPlan';
 import { computeVisits, type EngineEvent, type EnginePlace, type EngineVisit } from '../lib/visitEngine';
 
@@ -141,6 +144,43 @@ const tests: Array<[string, () => void]> = [
     assert.deepEqual(plan.updates.map((u) => u.id), [10]);
     assert.equal(plan.inserts.length, 1);
     assert.deepEqual(plan.removals, [12]);
+  }],
+  // --- etapa 4 ---
+  ['obnovovací klíč: base32 ve skupinách, tam a zpět, překlepy v mezerách nevadí', () => {
+    const key = 'q2FzZGZnaGprbHF3ZXJ0eXVpb3BhenhjdmJubTEyMzQ='; // 32 bajtů
+    const text = formatRecoveryKey(key);
+    assert.match(text, /^([A-Z2-7]{4}-){12}[A-Z2-7]{4}$/);
+    assert.equal(parseRecoveryKey(text), key);
+    assert.equal(parseRecoveryKey(`DOCHAZKA-KEY:${text.toLowerCase().replace(/-/g, ' ')}`), key);
+    assert.equal(parseRecoveryKey('ABC'), null);
+  }],
+  ['rotace záloh: 7 denních, 4 týdenní, 12 měsíčních', () => {
+    const names: string[] = [];
+    for (let i = 0; i < 400; i++) {
+      const d = new Date(2026, 9, 5 - i);
+      names.push(`Dochazka-zaloha-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.dochazka`);
+    }
+    names.push('Dochazka-pred-migraci-v3-2026-10-05.dochazka');
+    const deleted = new Set(backupsToDelete(names));
+    const kept = names.filter((n) => !deleted.has(n));
+    assert.ok(kept.includes('Dochazka-pred-migraci-v3-2026-10-05.dochazka'), 'zálohy před migrací se nemažou');
+    const daily = kept.filter((n) => n.startsWith('Dochazka-zaloha-'));
+    assert.ok(daily.length >= 12 && daily.length <= 23, `ponecháno ${daily.length}`);
+    for (let i = 0; i < 7; i++) assert.ok(daily.includes(names[i]), `chybí ${names[i]}`);
+    assert.ok(!kept.includes(names[399]), 'nejstarší (přes rok) se smaže');
+  }],
+  ['návrh zápisu pobytu: zamčený / naučený stroj, přestávka a zaokrouhlení', () => {
+    const cat = (id: number, name: string): WorkCategory => ({ id, name, rates: { hour: 900, day: 0, km: 0 }, defaultUnit: 'hour', weekendPct: null, holidayPct: null, sortOrder: id, isDeleted: false, color: '#F2B705', kind: 'machine' });
+    const categories = [cat(1, 'Tatra'), cat(2, 'Bagr')];
+    const settings = { ...DEFAULT_SETTINGS, autoSubtractBreak: true, breakMinutes: 30, roundingMinutes: 30 as const };
+    const ms = (8 * 60 + 15) * 60000; // 8 h 15 min
+    const p = proposeStayRecord(ms, { categoryId: 2, unit: 'hour', locked: true }, settings, categories);
+    assert.ok(p);
+    assert.equal(p.category.name, 'Bagr');
+    assert.equal(p.quantity, 8); // 7,75 h zaokrouhleno na 0,5 h
+    assert.equal(p.explanation, '8 h 15 min − 30 min přestávka, zaokrouhleno na 0,5 h');
+    assert.equal(p.locked, true);
+    assert.equal(proposeStayRecord(ms, null, settings, categories)?.category.name, 'Tatra'); // bez návrhu první stroj
   }],
 ];
 

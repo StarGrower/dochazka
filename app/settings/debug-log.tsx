@@ -29,6 +29,8 @@ const EVENT_LABELS: Record<DebugLogEntry['eventType'], string> = {
   trip_start: 'START JÍZDY',
   trip_end: 'KONEC JÍZDY',
   trip: 'PŘEJEZD',
+  backup: 'ZÁLOHA',
+  reminder: 'PŘIPOMENUTÍ',
 };
 
 function formatTimestamp(iso: string): string {

@@ -16,7 +16,17 @@
 // jen klávesnici, ne celé okno - rozepsaná hodnota se tak neztratí.
 
 import type { ReactNode } from 'react';
-import { Keyboard, KeyboardAvoidingView, Modal, Platform, StyleSheet, TouchableWithoutFeedback, View } from 'react-native';
+import {
+  Keyboard,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  StyleSheet,
+  TouchableWithoutFeedback,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 
 import { colors } from '@/theme';
 
@@ -24,9 +34,10 @@ interface BottomSheetModalProps {
   visible: boolean;
   onClose: () => void;
   children: ReactNode;
+  cardStyle?: StyleProp<ViewStyle>; // vlastní rozměry karty (např. podle grafické předlohy)
 }
 
-export default function BottomSheetModal({ visible, onClose, children }: BottomSheetModalProps) {
+export default function BottomSheetModal({ visible, onClose, children, cardStyle }: BottomSheetModalProps) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <TouchableWithoutFeedback
@@ -39,7 +50,7 @@ export default function BottomSheetModal({ visible, onClose, children }: BottomS
             style={styles.avoider}
           >
             <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-              <View style={styles.card}>{children}</View>
+              <View style={[styles.card, cardStyle]}>{children}</View>
             </TouchableWithoutFeedback>
           </KeyboardAvoidingView>
         </View>

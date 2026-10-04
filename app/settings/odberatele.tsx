@@ -1,40 +1,93 @@
-// Nastavení -> Moje údaje a odběratelé (ČÁST 3) - příprava na
-// fakturaci (zadání "PŘÍPRAVA NA FAKTURACI"), zatím čistě "Připravujeme"
-// - datový model (clients/orders) ještě neexistuje, viz POZNAMKY.md.
+// Nastavení -> Moje údaje (etapa 4.4) - hlavička výkazu pro šéfa (jméno,
+// IČO, adresa...). Odběratelé přijdou se zakázkami v etapě 5.
 
-import { StyleSheet, Text, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { ScrollView, StyleSheet, Text, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from 'expo-router';
 
+import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
-import { colors, fonts, radii, fs } from '@/theme';
+import { getSettings, updateSettings } from '@/lib/db';
+import type { AppSettings } from '@/lib/types';
+import { colors, fonts, fs, radii } from '@/theme';
 
-export default function OdberateleSettingsScreen() {
+type ProfileField = 'profileName' | 'profileIco' | 'profileDic' | 'profileAddress' | 'profilePhone' | 'profileEmail';
+
+const FIELDS: { key: ProfileField; label: string; placeholder: string; keyboard?: 'number-pad' | 'phone-pad' | 'email-address'; multiline?: boolean }[] = [
+  { key: 'profileName', label: 'Jméno / firma', placeholder: 'Jan Novák' },
+  { key: 'profileIco', label: 'IČO', placeholder: '12345678', keyboard: 'number-pad' },
+  { key: 'profileDic', label: 'DIČ', placeholder: 'CZ12345678' },
+  { key: 'profileAddress', label: 'Adresa', placeholder: 'Ulice 1, 123 45 Obec', multiline: true },
+  { key: 'profilePhone', label: 'Telefon', placeholder: '+420 …', keyboard: 'phone-pad' },
+  { key: 'profileEmail', label: 'E-mail', placeholder: 'jmeno@example.cz', keyboard: 'email-address' },
+];
+
+export default function MojeUdajeScreen() {
+  const [values, setValues] = useState<Pick<AppSettings, ProfileField> | null>(null);
+
+  const load = useCallback(async () => {
+    const s = await getSettings();
+    setValues({
+      profileName: s.profileName,
+      profileIco: s.profileIco,
+      profileDic: s.profileDic,
+      profileAddress: s.profileAddress,
+      profilePhone: s.profilePhone,
+      profileEmail: s.profileEmail,
+    });
+  }, []);
+
+  // useCallback je NUTNÝ - bez něj se `load` spustí po každém
+  // překreslení a přepíše rozepsané hodnoty v polích (oprava 2).
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
+  if (!values) return null;
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <ScreenHeader title="MOJE ÚDAJE A ODBĚRATELÉ" />
-
-      <View style={styles.content}>
-        <View style={styles.banner}>
-          <Text style={styles.bannerText}>
-            PŘIPRAVUJEME - tahle sekce bude součástí fakturace (vlastní firemní údaje, odběratelé -
-            název, IČO, DIČ, adresa). Datový model je promyšlený dopředu (viz POZNAMKY.md), ale
-            zatím se nestaví, ať se nepředbíhá zadání.
-          </Text>
-        </View>
-      </View>
+      <ScreenHeader title="MOJE ÚDAJE" />
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <Text style={styles.hint}>Zobrazí se v hlavičce výkazu pro šéfa. Odběratelé přibudou se zakázkami.</Text>
+        {FIELDS.map((f) => (
+          <TextInput
+            key={f.key}
+            style={[styles.input, f.multiline && styles.inputMultiline]}
+            value={values[f.key]}
+            onChangeText={(t) => setValues((v) => (v ? { ...v, [f.key]: t } : v))}
+            onBlur={() => updateSettings({ [f.key]: values[f.key].trim() })}
+            placeholder={`${f.label} - např. ${f.placeholder}`}
+            placeholderTextColor={colors.textMuted}
+            keyboardType={f.keyboard ?? 'default'}
+            autoCapitalize={f.keyboard === 'email-address' ? 'none' : 'sentences'}
+            multiline={f.multiline}
+            inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+          />
+        ))}
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  content: { paddingHorizontal: 16, paddingTop: 8 },
-  banner: {
+  content: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32, gap: 10 },
+  hint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginBottom: 4 },
+  input: {
     borderWidth: 1,
     borderColor: colors.border,
-    borderStyle: 'dashed',
     borderRadius: radii.card,
-    padding: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: fs(16),
+    fontFamily: fonts.body,
+    color: colors.text,
+    backgroundColor: colors.card,
+    minHeight: 48,
   },
-  bannerText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), lineHeight: 17 },
+  inputMultiline: { minHeight: 72, textAlignVertical: 'top' },
 });

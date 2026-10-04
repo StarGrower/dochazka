@@ -11,8 +11,11 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 
+import HealthBanner from '@/components/HealthBanner';
 import MonthGrid from '@/components/MonthGrid';
-import { getMonthSummary, getMonthTripKm, getSettings } from '@/lib/db';
+import { isBackupConfigured } from '@/lib/backup';
+import { getInternalValue, getMonthSummary, getMonthTripKm, getSettings, isDatabaseEmpty, setInternalValue } from '@/lib/db';
+import { runHealthChecks, type HealthCheck } from '@/lib/health';
 import { formatHours, monthNameUpper, todayIso } from '@/lib/format';
 import type { MonthDaySummary } from '@/lib/types';
 import { colors, fonts, radii, MIN_TOUCH, fs } from '@/theme';
@@ -27,6 +30,8 @@ export default function CalendarScreen() {
   const [summary, setSummary] = useState<Record<string, MonthDaySummary>>({});
   const [startOnMonday, setStartOnMonday] = useState(true);
   const [tripKmByDay, setTripKmByDay] = useState<Record<string, number>>({});
+  const [problems, setProblems] = useState<HealthCheck[]>([]);
+  const [offerRestore, setOfferRestore] = useState(false);
 
   const load = useCallback(async () => {
     const [data, settings, km] = await Promise.all([
@@ -36,6 +41,15 @@ export default function CalendarScreen() {
     ]);
     setSummary(data);
     setTripKmByDay(km);
+    // Etapa 4.2: stav záznamu (proužek) a 4.1: nový telefon -> nabídka obnovy.
+    runHealthChecks()
+      .then((r) => setProblems(r.checks.filter((c) => c.level !== 'ok')))
+      .catch(() => {});
+    if (!isBackupConfigured() && (await isDatabaseEmpty()) && !(await getInternalValue('restore_offer_dismissed'))) {
+      setOfferRestore(true);
+    } else {
+      setOfferRestore(false);
+    }
     setStartOnMonday(settings.weekStartsMonday);
   }, [visibleMonth]);
 
@@ -70,6 +84,26 @@ export default function CalendarScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
+      {problems.length > 0 && <HealthBanner problem={problems[0]} count={problems.length} />}
+      {offerRestore && (
+        <View style={styles.restoreCard}>
+          <Text style={styles.restoreTitle}>Máš zálohu z jiného telefonu?</Text>
+          <View style={styles.restoreButtons}>
+            <TouchableOpacity style={styles.restoreButton} onPress={() => router.push('/settings/zaloha')}>
+              <Text style={styles.restoreButtonText}>OBNOVIT</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.restoreDismiss}
+              onPress={async () => {
+                await setInternalValue('restore_offer_dismissed', '1');
+                setOfferRestore(false);
+              }}
+            >
+              <Text style={styles.restoreDismissText}>Ne, začít znovu</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
       <View style={styles.monthHeader}>
         <TouchableOpacity style={styles.monthArrow} onPress={() => goToMonth(-1)}>
           <Text style={styles.monthArrowText}>‹</Text>
@@ -117,6 +151,13 @@ function SummaryCard({ label, value, accent }: { label: string; value: string; a
 }
 
 const styles = StyleSheet.create({
+  restoreCard: { backgroundColor: colors.card, borderRadius: radii.card, borderWidth: 1, borderColor: colors.accent, padding: 14, marginBottom: 12 },
+  restoreTitle: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(15), marginBottom: 10 },
+  restoreButtons: { flexDirection: 'row', gap: 10 },
+  restoreButton: { flex: 1, minHeight: MIN_TOUCH, borderRadius: radii.card, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  restoreButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(15), letterSpacing: 1 },
+  restoreDismiss: { flex: 1, minHeight: MIN_TOUCH, alignItems: 'center', justifyContent: 'center' },
+  restoreDismissText: { color: colors.textMuted, fontFamily: fonts.bodySemiBold, fontSize: fs(14) },
   container: { flex: 1, backgroundColor: colors.background },
   scrollContent: { padding: 16, paddingBottom: 32 },
   monthHeader: {
