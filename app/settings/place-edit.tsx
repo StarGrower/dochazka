@@ -107,7 +107,7 @@ export default function PlaceEditScreen() {
       } else {
         await createPlace(fields);
       }
-      await refreshGeofences().catch(() => {});
+      await refreshGeofences({ force: true, reason: placeId ? 'úprava místa' : 'nové místo' }).catch(() => {});
       // Nové/změněné místo -> pobyty posledních dnů (a od pobytu, ze
       // kterého se místo uložilo) se přepočítají s novým místem.
       await rebuildRecentVisits(rebuildFrom ? Date.parse(rebuildFrom) : undefined).catch(() => {});

@@ -41,12 +41,12 @@ export interface PlannedTrip {
   gpsFirstPointAt: string | null;
 }
 
-interface Coord {
+export interface Coord {
   latitude: number;
   longitude: number;
 }
 
-function coordOf(v: PlanVisit): Coord | null {
+export function coordOf(v: PlanVisit): Coord | null {
   if (v.placeId !== null) {
     return v.placeLatitude !== null && v.placeLongitude !== null
       ? { latitude: v.placeLatitude, longitude: v.placeLongitude }
@@ -183,6 +183,65 @@ export function matchTrips(computed: PlannedTrip[], existing: ExistingTrip[]): T
   return plan;
 }
 
-export function tripKm(trip: { kmOverride: number | null; distanceM: number }): number {
-  return trip.kmOverride ?? trip.distanceM / 1000;
+// --- dopočet po silnici (oprava po terénním testu etapy 3) ---
+//
+// GPS body jsou úsečky "vzdušnou čarou" - kde je mezi body velká mezera
+// (GPS nedodala body, nebo začátek/konec jízdy), vzdušná čára silnici
+// zkrátí (v testu −15 až −18 %). Takové úseky se dopočítají po silnici
+// (MKDirections): mezery > 300 m, začátek (místo odjezdu -> 1. bod) a
+// konec (poslední bod -> místo příjezdu) od 100 m. Bez bodů celý přejezd.
+
+export const ROAD_GAP_M = 300;
+export const ROAD_ENDS_MIN_M = 100;
+
+export interface RoadSegment {
+  kind: 'start' | 'gap' | 'end' | 'whole';
+  from: Coord;
+  to: Coord;
+  straightM: number;
+}
+
+export interface RoadPlan {
+  gpsM: number; // součet úseků mezi body, které se nedopočítávají
+  segments: RoadSegment[]; // úseky k dopočtu po silnici
+}
+
+export function planRoadSegments(points: RoutePoint[], from: Coord | null, to: Coord | null): RoadPlan {
+  const usable = filterRoutePoints(points);
+  if (usable.length < 2) {
+    return from && to ? { gpsM: 0, segments: [{ kind: 'whole', from, to, straightM: dist(from, to) }] } : { gpsM: 0, segments: [] };
+  }
+  const segments: RoadSegment[] = [];
+  let gpsM = 0;
+  const first = usable[0];
+  const last = usable[usable.length - 1];
+  if (from) {
+    const d = dist(from, first);
+    if (d >= ROAD_ENDS_MIN_M) segments.push({ kind: 'start', from, to: first, straightM: d });
+    else gpsM += d;
+  }
+  for (let i = 1; i < usable.length; i++) {
+    const d = dist(usable[i - 1], usable[i]);
+    if (d > ROAD_GAP_M) segments.push({ kind: 'gap', from: usable[i - 1], to: usable[i], straightM: d });
+    else gpsM += d;
+  }
+  if (to) {
+    const d = dist(last, to);
+    if (d >= ROAD_ENDS_MIN_M) segments.push({ kind: 'end', from: last, to, straightM: d });
+    else gpsM += d;
+  }
+  return { gpsM, segments };
+}
+
+// Silnice nikdy kratší než vzdušná čára; nesmyslně dlouhá objížďka
+// (víc než 2,5× vzdušná čára - např. špatně přichycený bod) se nebere.
+export function acceptRoadDistance(straightM: number, roadM: number): number {
+  if (roadM <= 0) return straightM;
+  if (roadM > straightM * 2.5 + 500) return straightM;
+  return Math.max(straightM, roadM);
+}
+
+// Km přejezdu: ruční oprava > dopočet po silnici > GPS (vzdušnou čarou mezi body).
+export function tripKm(trip: { kmOverride: number | null; distanceM: number; roadDistanceM?: number | null }): number {
+  return trip.kmOverride ?? (trip.roadDistanceM ?? trip.distanceM) / 1000;
 }

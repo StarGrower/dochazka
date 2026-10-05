@@ -141,6 +141,44 @@ migrací = cílová verze, `…pred-etapou-${from + 1}`.)
   pobytů) / Připomenout večer / Dnes nezapisovat. iOS ukáže max. 4 akce,
   proto u neznámého místa místo "Upravit v aplikaci".
 
+### Opravy po terénním testu etapy 3 (5. 10.)
+
+Deník `private/denik-2026-10-05.txt`. Fungovalo: start GPS z probuzení
+na pozadí (zpoždění 32 s / 1 min 25 s), trasy, žádné duplicity ani
+bouře geofence. V deníku nebyly záznamy ZÁLOHA -> etapa 4 ještě nebyla
+nainstalovaná.
+
+1. **Km podhodnocené o 15-18 %** (16 bodů na 25 km - úsporná kvalita
+   ~100 m + `pausesUpdatesAutomatically`): GPS během jízdy dostává
+   všechny aktualizace (`distanceInterval` 0, bez pozastavení), ukládá
+   bod po 25 m (přesná, BestForNavigation) / 50 m (úsporná, High),
+   nejpozději každou minutu. **Dopočet po silnici** (MKDirections,
+   automobil; nativní `roadDistance`): mezery mezi body > 300 m, začátek
+   a konec od 100 m, bez bodů celý přejezd; silnice nikdy kratší než
+   vzdušná čára, objížďka > 2,5× se nebere. Původní GPS hodnota zůstává
+   (`distance_m`), výsledek `road_distance_m` + rozpad `road_note`. Bez
+   sítě `road_status = 'pending'` ("dopočítává se"), zkusí se při
+   dalším probuzení. Km = ruční ?? silnice ?? GPS.
+2. **GPS běžela 21 min po příjezdu**: konec jízdy po ~5 min stání
+   (poloha do 100 m, rychlost < 7 km/h). Stav pohybu v paměti, do DB jen s
+   uloženým bodem (úloha se volá ~1× za sekundu).
+3. **KONEC JÍZDY vs PŘEJEZD**: KONEC = body za dobu sledování, GPS úsek
+   bez dopočtu (výslovně napsáno); PŘEJEZD se zapíše až po dopočtu po
+   silnici s rozpadem "GPS body X + začátek/mezery/konec po silnici".
+4. **Geofence nového místa až při otevření appky**: po uložení / úpravě
+   / smazání místa vždy nová registrace (`force`), výsledek do deníku
+   (GEOFENCE REGISTRACE / chyba) + dorovnání při každém otevření appky.
+5. `kCLErrorDomain Code=0` (poloha zatím neznámá) se ignoruje.
+6. Hodiny nikdy se dvěma desetinnými místy: "8 h 43 min" (kalendář
+   "8:43 h"), celé a půlhodiny "8 h" / "8,5 h".
+7. Deník: PŘIPOMENUTÍ naplánováno / přeplánováno / doručeno / zrušeno
+   (důvod: pobyt zapsán, návrat na místo, Dnes nezapisovat, vypnuto),
+   akce z upozornění (už bylo), ZÁLOHA OK/SELHALA (už bylo).
+
+Migrace v5 (`trips.road_distance_m`, `road_status`, `road_note`) - stávající
+přejezdy se po instalaci dopočítají po silnici. Záloha před migrací
+`dochazka-zaloha-pred-opravami-etapy-3.db`.
+
 ### Etapa 4 - co testovat
 
 1. **Záloha:** Nastavení -> Záloha -> VYBRAT SLOŽKU (iCloud Drive ->

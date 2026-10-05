@@ -117,7 +117,7 @@ export default function MonthGrid({ year, month, summary, todayIso, onSelectDay,
                 {holiday && <View style={[styles.holidayBar, isToday && styles.holidayBarToday]} />}
                 {hasRecord && daySummary.hours > 0 && (
                   <Text style={[styles.dayHours, isToday && styles.dayHoursToday]}>
-                    {formatHours(daySummary.hours)}
+                    {formatHours(daySummary.hours, true)}
                   </Text>
                 )}
               </TouchableOpacity>

@@ -4,6 +4,7 @@
 
 import ExpoModulesCore
 import UIKit
+import MapKit
 import UniformTypeIdentifiers
 
 final class NativeError: GenericException<String> {
@@ -149,6 +150,20 @@ public final class DochazkaNativeModule: Module {
         switch result {
         case .success(let base64): promise.resolve(base64)
         case .failure(let error): promise.reject(NativeError("\(error)"))
+        }
+      }
+    }.runOnQueue(.main)
+
+    // --- vzdálenost po silnici (dopočet přejezdů) ---
+
+    AsyncFunction("roadDistance") { (fromLat: Double, fromLon: Double, toLat: Double, toLon: Double, promise: Promise) in
+      RoadDistance.measure(
+        from: CLLocationCoordinate2D(latitude: fromLat, longitude: fromLon),
+        to: CLLocationCoordinate2D(latitude: toLat, longitude: toLon)
+      ) { result in
+        switch result {
+        case .success(let meters): promise.resolve(meters)
+        case .failure(let error): promise.reject(NativeError("\(error.localizedDescription)"))
         }
       }
     }.runOnQueue(.main)

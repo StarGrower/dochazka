@@ -2,19 +2,24 @@
 // čte a zapisuje DB a dokončené přejezdy se zapíšou do ladicího deníku.
 // Volá se z lib/visits.ts po každém přepočtu pobytů (uvnitř runExclusive).
 
+import DochazkaNative from '../modules/dochazka-native/src/DochazkaNative';
 import {
   addDebugLogEntry,
   applyTripPlan,
   getInternalValue,
   getSettings,
+  listPlaces,
   listRoutePoints,
+  listRoutePointsForTrip,
   listTripsForReconcile,
+  listTripsNeedingRoad,
   listUnloggedTrips,
   listVisitsForTrips,
   markTripLogged,
+  setTripRoad,
 } from './db';
 import { formatNumberCs } from './format';
-import { computeGapTrips, matchTrips, tripKm } from './tripPlan';
+import { acceptRoadDistance, computeGapTrips, matchTrips, planRoadSegments, tripKm, type Coord } from './tripPlan';
 import type { AppSettings, Trip } from './types';
 
 export const KEY_TRIP_LAST_FAILURE = 'trip_last_failure'; // JSON { at, reason } - poslední selhání startu GPS
@@ -45,7 +50,75 @@ export async function reconcileTrips(fromMs: number | null): Promise<void> {
   );
   if (plan.inserts.length || plan.updates.length || plan.removals.length) await applyTripPlan(plan);
 
+  await refineRoadDistances();
   await logFinishedTrips(settings);
+}
+
+// --- dopočet po silnici (oprava po terénním testu etapy 3) ---
+
+const km1 = (m: number) => formatNumberCs(Math.round(m / 100) / 10);
+
+// Dokončené přejezdy bez dopočtu -> úseky bez bodů GPS po silnici
+// (MKDirections). Bez sítě zůstane 'pending' a zkusí se při dalším
+// probuzení appky. Volat v runExclusive.
+export async function refineRoadDistances(limit = 5): Promise<void> {
+  const trips = await listTripsNeedingRoad(limit);
+  if (trips.length === 0) return;
+  const places = new Map((await listPlaces(true)).map((p) => [p.id, p]));
+  const coord = (placeId: number | null, lat: number | null, lon: number | null): Coord | null => {
+    if (placeId !== null) {
+      const p = places.get(placeId);
+      return p ? { latitude: p.latitude, longitude: p.longitude } : null;
+    }
+    return lat !== null && lon !== null ? { latitude: lat, longitude: lon } : null;
+  };
+
+  for (const trip of trips) {
+    const plan = planRoadSegments(
+      await listRoutePointsForTrip(trip.id),
+      coord(trip.fromPlaceId, trip.fromLatitude, trip.fromLongitude),
+      coord(trip.toPlaceId, trip.toLatitude, trip.toLongitude)
+    );
+    if (plan.segments.length === 0) {
+      await setTripRoad(trip.id, 'none', null, `GPS body ${km1(plan.gpsM)} km (bez mezer k dopočtu)`);
+      continue;
+    }
+    let total = plan.gpsM;
+    const parts = { start: 0, end: 0, gaps: 0, gapCount: 0, whole: 0 };
+    let offline = false;
+    for (const seg of plan.segments) {
+      let road: number;
+      try {
+        road = await DochazkaNative.roadDistance(seg.from.latitude, seg.from.longitude, seg.to.latitude, seg.to.longitude);
+      } catch {
+        offline = true;
+        break;
+      }
+      const m = acceptRoadDistance(seg.straightM, road);
+      total += m;
+      if (seg.kind === 'gap') {
+        parts.gaps += m;
+        parts.gapCount += 1;
+      } else {
+        parts[seg.kind] += m;
+      }
+    }
+    if (offline) {
+      if (trip.roadStatus !== 'pending') await setTripRoad(trip.id, 'pending', null, 'dopočítává se (čeká na síť)');
+      break; // bez sítě nemá smysl zkoušet další
+    }
+    const note = parts.whole
+      ? `celý přejezd po silnici ${km1(parts.whole)} km (bez bodů GPS)`
+      : [
+          `GPS body ${km1(plan.gpsM)} km`,
+          parts.start ? `začátek po silnici ${km1(parts.start)} km` : null,
+          parts.gapCount ? `mezery po silnici ${km1(parts.gaps)} km (${parts.gapCount}×)` : null,
+          parts.end ? `konec po silnici ${km1(parts.end)} km` : null,
+        ]
+          .filter(Boolean)
+          .join(' + ');
+    await setTripRoad(trip.id, 'done', total, note);
+  }
 }
 
 // --- ladicí deník (zadání etapy 3, bod 6 + doplnění) ---
@@ -83,6 +156,8 @@ async function missingPointsReason(trip: Trip, settings: AppSettings): Promise<s
 async function logFinishedTrips(settings: AppSettings): Promise<void> {
   const trips = await listUnloggedTrips(new Date().toISOString());
   for (const trip of trips) {
+    // Do deníku až s konečnými km (po dopočtu po silnici).
+    if (trip.roadStatus === null || trip.roadStatus === 'pending') continue;
     const reason = trip.isEstimate ? await missingPointsReason(trip, settings) : null;
     const delay =
       trip.gpsFirstPointAt && !trip.isEstimate
@@ -95,7 +170,8 @@ async function logFinishedTrips(settings: AppSettings): Promise<void> {
       detail:
         `přejezd ${hhmm(trip.startAt)}–${hhmm(trip.endAt)} · ${km} · ${trip.pointCount} bodů · ` +
         (reason ? `odhad ano (${reason})` : 'odhad ne') +
-        delay,
+        delay +
+        (trip.roadNote ? ` · rozpad: ${trip.roadNote} (vzdušnou čarou ${km1(trip.distanceM)} km)` : ''),
       batteryLevel: null,
       latitude: null,
       longitude: null,

@@ -35,7 +35,7 @@ export default function PlacesSettingsScreen() {
         style: 'destructive',
         onPress: async () => {
           await deletePlace(place.id);
-          await refreshGeofences().catch(() => {});
+          await refreshGeofences({ force: true, reason: 'smazání místa' }).catch(() => {});
           await rebuildRecentVisits().catch(() => {});
           await load();
         },

@@ -5,7 +5,14 @@
 // poslední pobyt právě skončil (CLVisit odjezd, výstup z geofence nebo
 // významná změna daleko od místa - cokoliv přijde dřív) = odjezd -> GPS
 // zapnout; začal nový pobyt = příjezd -> GPS vypnout. Navíc se GPS vypne
-// po ~10 min stání (body do 100 m od sebe) a po 4 h jako pojistka.
+// po ~5 min stání (poloha do 100 m, rychlost ~0 - CLVisit příjezd chodí
+// pozdě, v testu GPS běžela 21 min po příjezdu) a po 4 h jako pojistka.
+//
+// OPRAVA po terénním testu (km −15 až −18 %, jen 16 bodů na 25 km):
+// GPS dostává VŠECHNY aktualizace (distanceInterval 0, bez pozastavení) -
+// jinak by při stání nechodily žádné body a stání by nešlo poznat -, ale
+// ukládá se jen bod po 25 m (přesná) / 50 m (úsporná), nejpozději každou
+// minutu. Mezery a konce dopočítá po silnici lib/trips.ts.
 // Body se ukládají do route_points; k přejezdu je přiřadí lib/trips.ts.
 // Jen v úsporném režimu - v průběžném GPS běží stejně (body z něj se
 // ukládají jako body trasy, viz lib/locationTracking.ts).
@@ -37,8 +44,16 @@ const KEY_TRIP_SESSION = 'trip_session';
 const KEY_TRIP_HANDLED_DEPARTURE = 'trip_handled_departure';
 // Odjezd starší než tohle už sledování nespustí (stará událost doručená pozdě).
 const MAX_DEPARTURE_AGE_MS = 30 * 60 * 1000;
-const STATIONARY_MS = 10 * 60 * 1000;
+const STATIONARY_MS = 5 * 60 * 1000;
 const STATIONARY_RADIUS_M = 100;
+const MOVING_SPEED_MPS = 2; // ~7 km/h - pod tím se počítá jako stání
+const STORE_MAX_INTERVAL_MS = 60 * 1000;
+const KEY_TRIP_MOTION = 'trip_motion'; // JSON MotionState - přežije restart procesu
+
+interface MotionState {
+  anchor: { latitude: number; longitude: number; t: number }; // poslední místo, kde se jelo
+  lastStored: { latitude: number; longitude: number; t: number } | null;
+}
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000;
 
 interface TripSession {
@@ -65,17 +80,35 @@ function isRouteTrackingActive(settings: AppSettings): boolean {
   return settings.locationTrackingEnabled && settings.routeTrackingEnabled && settings.locationMode === 'economical';
 }
 
-// Přesná: GPS ~10 m, bod po 50 m. Úsporná: ~100 m (spíš Wi-Fi/BTS než
-// čisté GPS), bod po 100 m - výrazně menší spotřeba, trasa hrubší.
+// Přesná: navigační přesnost, ukládá bod po 25 m. Úsporná: GPS ~10 m,
+// bod po 50 m. GPS běží jen během jízdy.
 function trackingOptions(settings: AppSettings): Location.LocationTaskOptions {
   const precise = settings.routeQuality === 'precise';
   return {
-    accuracy: precise ? Location.LocationAccuracy.High : Location.LocationAccuracy.Balanced,
-    distanceInterval: precise ? 50 : 100,
+    accuracy: precise ? Location.LocationAccuracy.BestForNavigation : Location.LocationAccuracy.High,
+    distanceInterval: 0,
     activityType: Location.LocationActivityType.AutomotiveNavigation,
-    pausesUpdatesAutomatically: true,
+    pausesUpdatesAutomatically: false,
     showsBackgroundLocationIndicator: false,
   };
+}
+
+function storeSpacingM(settings: AppSettings): number {
+  return settings.routeQuality === 'precise' ? 25 : 50;
+}
+
+// GPS volá úlohu zhruba každou sekundu - stav pohybu je v paměti, do DB
+// se zapíše jen s uloženým bodem (kvůli restartu procesu uprostřed jízdy).
+let motionMemo: { sessionStartedAt: string; motion: MotionState } | null = null;
+
+async function getMotion(sessionStartedAt: string): Promise<MotionState | null> {
+  if (motionMemo?.sessionStartedAt === sessionStartedAt) return motionMemo.motion;
+  try {
+    const raw = await getInternalValue(KEY_TRIP_MOTION);
+    return raw ? (JSON.parse(raw) as MotionState) : null;
+  } catch {
+    return null;
+  }
 }
 
 const hhmm = (iso: string) => {
@@ -108,12 +141,16 @@ async function startSession(departedAt: string, reason: string, settings: AppSet
 async function stopSession(session: TripSession, reason: string): Promise<void> {
   await Location.stopLocationUpdatesAsync(TRIP_TASK_NAME).catch(() => {});
   await setSession(null);
+  await setInternalValue(KEY_TRIP_MOTION, '');
+  motionMemo = null;
   await setInternalValue(KEY_TRIP_HANDLED_DEPARTURE, session.departedAt);
   const nowIso = new Date().toISOString();
   const points = filterRoutePoints(await listRoutePoints(session.departedAt, nowIso));
   const km = routeDistanceM(points, null, null) / 1000;
   const delay = points.length > 0 ? formatDelay(Date.parse(points[0].timestamp) - Date.parse(session.departedAt)) : null;
-  let detail = `konec sledování jízdy (${reason}) · ${points.length} bodů · ${formatNumberCs(Math.round(km * 10) / 10)} km`;
+  // Jen body za dobu sledování, mezi body vzdušnou čarou - konečné km
+  // přejezdu (s dopočtem začátku, konce a mezer po silnici) viz PŘEJEZD.
+  let detail = `konec sledování jízdy (${reason}) · ${points.length} bodů za dobu sledování · GPS úsek ${formatNumberCs(Math.round(km * 10) / 10)} km (bez dopočtu začátku/konce - konečné km viz PŘEJEZD)`;
   if (delay) detail += ` · zpoždění startu GPS ${delay}`;
   if (points.length === 0) {
     detail += session.error
@@ -178,40 +215,43 @@ export function processTripLocations(locations: Location.LocationObject[]): Prom
       await Location.stopLocationUpdatesAsync(TRIP_TASK_NAME).catch(() => {});
       return;
     }
+    const settings = await getSettings();
+    const spacing = storeSpacingM(settings);
+    let motion = await getMotion(session.startedAt);
+    let stored = false;
 
-    const recent = await listRoutePoints(new Date(Date.now() - STATIONARY_MS - 2 * 60000).toISOString(), new Date().toISOString());
-    let last = recent[recent.length - 1] ?? null;
     for (const loc of [...locations].sort((a, b) => a.timestamp - b.timestamp)) {
       const accuracy = loc.coords.accuracy ?? null;
       if (accuracy !== null && accuracy > MAX_POINT_ACCURACY_M) continue;
-      const timestamp = new Date(loc.timestamp).toISOString();
+      const here = { latitude: loc.coords.latitude, longitude: loc.coords.longitude, t: loc.timestamp };
+      const speed = loc.coords.speed !== null && loc.coords.speed >= 0 ? loc.coords.speed : null;
+
+      if (!motion) motion = { anchor: here, lastStored: null };
+      // Pohyb: rychlost nad ~7 km/h nebo posun > 100 m od posledního místa jízdy.
+      const fromAnchor = distanceMeters(motion.anchor.latitude, motion.anchor.longitude, here.latitude, here.longitude);
+      if ((speed !== null && speed >= MOVING_SPEED_MPS) || fromAnchor > STATIONARY_RADIUS_M) motion.anchor = here;
+
+      // Uložit bod: po `spacing` metrech, nejpozději každou minutu; skoky pryč.
+      const last = motion.lastStored;
       if (last) {
-        const dt = (loc.timestamp - Date.parse(last.timestamp)) / 1000;
+        const dt = (here.t - last.t) / 1000;
         if (dt <= 0) continue;
-        const speed = distanceMeters(last.latitude, last.longitude, loc.coords.latitude, loc.coords.longitude) / dt;
-        if (speed > MAX_SPEED_MPS) continue;
+        const d = distanceMeters(last.latitude, last.longitude, here.latitude, here.longitude);
+        if (d / dt > MAX_SPEED_MPS) continue;
+        if (d < spacing && here.t - last.t < STORE_MAX_INTERVAL_MS) continue;
       }
-      const point = {
-        timestamp,
-        latitude: loc.coords.latitude,
-        longitude: loc.coords.longitude,
-        accuracyM: accuracy,
-        speedMps: loc.coords.speed !== null && loc.coords.speed >= 0 ? loc.coords.speed : null,
-      };
-      await insertRoutePoint(point);
-      recent.push(point);
-      last = point;
+      await insertRoutePoint({ timestamp: new Date(here.t).toISOString(), latitude: here.latitude, longitude: here.longitude, accuracyM: accuracy, speedMps: speed });
+      motion.lastStored = here;
+      stored = true;
     }
 
-    // Stání ~10 min (body do 100 m od sebe) = cíl, GPS vypnout.
-    if (!last) return;
-    const newest = last;
-    const windowStart = Date.parse(newest.timestamp) - STATIONARY_MS;
-    const inWindow = recent.filter((p) => Date.parse(p.timestamp) >= windowStart - 60000);
-    const coversWindow = inWindow.length > 1 && Date.parse(inWindow[0].timestamp) <= windowStart;
-    const allNear = inWindow.every(
-      (p) => distanceMeters(p.latitude, p.longitude, newest.latitude, newest.longitude) <= STATIONARY_RADIUS_M
-    );
-    if (coversWindow && allNear) await stopSession(session, 'stání 10 min');
+    if (!motion) return;
+    motionMemo = { sessionStartedAt: session.startedAt, motion };
+    // Stání ~5 min = cíl (CLVisit příjezd může přijít až za desítky minut).
+    if (Date.now() - motion.anchor.t >= STATIONARY_MS) {
+      await stopSession(session, 'stání 5 min');
+      return;
+    }
+    if (stored) await setInternalValue(KEY_TRIP_MOTION, JSON.stringify(motion));
   });
 }

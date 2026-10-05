@@ -12,7 +12,7 @@ import { buildDayTimeline } from '../lib/dayTimeline';
 import { proposeStayRecord } from '../lib/stayProposal';
 import { DEFAULT_SETTINGS, type WorkCategory } from '../lib/types';
 import { applyRounding } from '../lib/workCalc';
-import { computeGapTrips, filterRoutePoints, matchTrips, type PlanVisit } from '../lib/tripPlan';
+import { acceptRoadDistance, computeGapTrips, filterRoutePoints, matchTrips, planRoadSegments, tripKm, type PlanVisit } from '../lib/tripPlan';
 import { computeVisits, type EngineEvent, type EnginePlace, type EngineVisit } from '../lib/visitEngine';
 
 const A: EnginePlace = { id: 1, latitude: 0.01, longitude: 0.01, radiusM: 150 };
@@ -190,6 +190,21 @@ const tests: Array<[string, () => void]> = [
     assert.equal(r(7.6, 'up'), 8);
     assert.equal(r(7.5000001, 'up'), 7.5);
     assert.equal(applyRounding(7.33, { roundingMinutes: 0, roundingMode: 'down' }), 7.33);
+  }],
+  ['dopočet po silnici: začátek, mezery > 300 m a konec; hustá trasa bez dopočtu', () => {
+    const pt = (sec: number, lon: number) => ({ timestamp: new Date(Date.UTC(2026, 0, 5, 8, 0, sec)).toISOString(), latitude: 0, longitude: lon, accuracyM: 10, speedMps: null });
+    // body po ~111 m (0,001°), jedna mezera ~1,1 km (0,010 -> 0,020)
+    const points = [pt(10, 0.002), pt(20, 0.003), pt(30, 0.004), pt(100, 0.014), pt(110, 0.015)];
+    const plan = planRoadSegments(points, { latitude: 0, longitude: 0 }, { latitude: 0, longitude: 0.0152 });
+    assert.deepEqual(plan.segments.map((s) => s.kind), ['start', 'gap']); // konec 22 m - bez dopočtu
+    assert.ok(Math.abs(plan.gpsM - (111 * 3 + 22)) < 10, `gps ${plan.gpsM}`);
+    const none = planRoadSegments([], { latitude: 0, longitude: 0 }, { latitude: 0, longitude: 0.1 });
+    assert.deepEqual(none.segments.map((s) => s.kind), ['whole']);
+    assert.equal(acceptRoadDistance(1000, 1250), 1250);
+    assert.equal(acceptRoadDistance(1000, 800), 1000); // silnice nikdy kratší než vzdušná čára
+    assert.equal(acceptRoadDistance(1000, 9000), 1000); // nesmyslná objížďka
+    assert.equal(acceptRoadDistance(1000, -1), 1000); // trasa nenalezena
+    assert.equal(tripKm({ kmOverride: null, distanceM: 20600, roadDistanceM: 24800 }), 24.8);
   }],
 ];
 

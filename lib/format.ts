@@ -62,9 +62,15 @@ export function formatDayHeaderSummary(hours: number, km: number | null): string
   return `${hoursPart} · ${Math.round(km)} km`;
 }
 
-export function formatHours(hours: number): string {
-  const rounded = Math.round(hours * 100) / 100;
-  return `${rounded.toString().replace('.', ',')} h`;
+// Hodiny nikdy se dvěma desetinnými místy (oprava po terénním testu -
+// "8,71 h"): celé a půlhodiny "8 h" / "8,5 h", jinak "8 h 43 min";
+// `compact` (buňka kalendáře) "8:43 h".
+export function formatHours(hours: number, compact = false): string {
+  const totalMin = Math.round(hours * 60);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (m === 0 || m === 30) return `${formatNumberCs(totalMin / 60)} h`;
+  return compact ? `${h}:${String(m).padStart(2, '0')} h` : h > 0 ? `${h} h ${m} min` : `${m} min`;
 }
 
 export function formatDays(days: number): string {
@@ -86,7 +92,7 @@ export function formatNumberCs(n: number): string {
 // "8 h", "1 den", "2 dny", "5 dní", "0,5 dne", "120 km"
 export function formatQuantity(quantity: number, unit: RateUnit): string {
   const n = formatNumberCs(quantity);
-  if (unit === 'hour') return `${n} h`;
+  if (unit === 'hour') return formatHours(quantity);
   if (unit === 'km') return `${n} km`;
   if (!Number.isInteger(quantity)) return `${n} dne`;
   if (quantity === 1) return '1 den';

@@ -146,6 +146,12 @@ function schedule(id: string, title: string, body: string, fireAtMs: number, act
   DochazkaNative.scheduleNotification(id, title, body, fireAtMs, actions, JSON.stringify(payload));
 }
 
+// Do ladicího deníku (oprava po terénním testu): naplánováno / doručeno /
+// zrušeno s důvodem; akce z upozornění viz handleResponse.
+function logReminder(detail: string): Promise<void> {
+  return addDebugLogEntry({ timestamp: new Date().toISOString(), eventType: 'reminder', detail, batteryLevel: null, latitude: null, longitude: null });
+}
+
 // Volat v runExclusive (po přepočtu pobytů, po zápisu, při startu appky).
 export async function evaluateReminders(): Promise<void> {
   const settings = await getSettings();
@@ -155,13 +161,30 @@ export async function evaluateReminders(): Promise<void> {
 
   const desired = new Map<string, { title: string; body: string; fireAt: number; actions: NotificationAction[]; payload: StayPayload }>();
   const dayDismissed = states.get(`day|${date}`)?.state === 'dismissed';
+  // Proč naplánované upozornění odpadá (do deníku při zrušení).
+  const cancelReason = new Map<string, string>();
+  const defaultCancelReason = dayDismissed
+    ? '"Dnes nezapisovat"'
+    : !remindersEnabled(settings)
+      ? 'připomenutí vypnutá'
+      : settings.remindersOnlyWorkdays && !isWorkday(date)
+        ? 'není pracovní den'
+        : 'už není potřeba';
 
   if (remindersEnabled(settings) && !dayDismissed && (!settings.remindersOnlyWorkdays || isWorkday(date))) {
     const categories = await listCategories();
     const recorded = await recordedPlacesForDate(date);
     const win = windowBounds(date, settings);
     const depKey = (st: WorkStay) => `dep|${date}|${st.key}`;
-    const stays = (await workStaysForDate(date, now, true)).filter(
+    const allStays = await workStaysForDate(date, now, true);
+    for (const st of allStays) {
+      if ((st.placeId !== null && recorded.has(st.placeId)) || states.get(depKey(st))?.state === 'written') {
+        cancelReason.set(depKey(st), 'pobyt zapsán');
+      } else if (st.lastEndMs === null) {
+        cancelReason.set(depKey(st), 'návrat na místo / pořád na místě');
+      }
+    }
+    const stays = allStays.filter(
       (st) =>
         (st.placeId === null || !recorded.has(st.placeId)) &&
         states.get(depKey(st))?.state !== 'written' &&
@@ -267,21 +290,25 @@ export async function evaluateReminders(): Promise<void> {
     const state = states.get(key);
     if (state?.state === 'scheduled' && state.fireAt && Date.parse(state.fireAt) <= now) {
       await setReminderState(key, 'sent', state.fireAt, state.payload); // už doručeno
+      await logReminder(`doručeno ${key} (${hhmm(Date.parse(state.fireAt))})`);
       continue;
     }
     const payloadText = JSON.stringify(n.payload) + n.body;
     if (state?.state === 'scheduled' && state.payload === payloadText) continue; // beze změny
     schedule(key, n.title, n.body, n.fireAt, n.actions, n.payload);
     await setReminderState(key, 'scheduled', new Date(n.fireAt).toISOString(), payloadText);
+    await logReminder(`${state?.state === 'scheduled' ? 'přeplánováno' : 'naplánováno'} ${key} na ${hhmm(Math.max(n.fireAt, now))}: ${n.title}`);
   }
   for (const [key, state] of states) {
     if (state.state !== 'scheduled' || desired.has(key)) continue;
     if (state.fireAt && Date.parse(state.fireAt) <= now) {
       await setReminderState(key, 'sent', state.fireAt, state.payload);
+      await logReminder(`doručeno ${key} (${hhmm(Date.parse(state.fireAt))})`);
     } else {
       // Zapsáno, návrat na místo, vypnuto, "Dnes nezapisovat" -> zrušit.
       DochazkaNative.cancelNotification(key);
       await setReminderState(key, 'dismissed', null, state.payload);
+      await logReminder(`zrušeno ${key} - ${cancelReason.get(key) ?? defaultCancelReason}`);
     }
   }
 }

@@ -16,6 +16,12 @@ import {
 } from './locationTracking';
 import { processTripLocations, TRIP_TASK_NAME } from './tripTracking';
 
+// kCLErrorLocationUnknown (kCLErrorDomain Code=0) je dočasný stav - iOS
+// polohu zatím nezná a zkusí to znovu. Není to chyba, do deníku nepatří.
+function isTransientLocationError(error: { message: string }): boolean {
+  return /kCLErrorDomain\s+Code=0\b/.test(error.message);
+}
+
 interface GeofenceTaskData {
   eventType: Location.LocationGeofencingEventType;
   region: Location.LocationRegion;
@@ -27,6 +33,7 @@ interface LocationUpdateTaskData {
 
 TaskManager.defineTask<GeofenceTaskData>(GEOFENCE_TASK_NAME, async ({ data, error }) => {
   if (error) {
+    if (isTransientLocationError(error)) return;
     await addDebugLogEntry({
       timestamp: new Date().toISOString(),
       eventType: 'error',
@@ -43,6 +50,7 @@ TaskManager.defineTask<GeofenceTaskData>(GEOFENCE_TASK_NAME, async ({ data, erro
 
 TaskManager.defineTask<LocationUpdateTaskData>(CONTINUOUS_LOCATION_TASK_NAME, async ({ data, error }) => {
   if (error) {
+    if (isTransientLocationError(error)) return;
     await addDebugLogEntry({
       timestamp: new Date().toISOString(),
       eventType: 'error',
@@ -60,6 +68,7 @@ TaskManager.defineTask<LocationUpdateTaskData>(CONTINUOUS_LOCATION_TASK_NAME, as
 // Etapa 3 - body GPS během přejezdu (viz lib/tripTracking.ts).
 TaskManager.defineTask<LocationUpdateTaskData>(TRIP_TASK_NAME, async ({ data, error }) => {
   if (error) {
+    if (isTransientLocationError(error)) return;
     await addDebugLogEntry({
       timestamp: new Date().toISOString(),
       eventType: 'error',

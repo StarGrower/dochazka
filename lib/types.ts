@@ -117,8 +117,13 @@ export interface Trip {
   toPlaceId: number | null;
   toLatitude: number | null;
   toLongitude: number | null;
-  distanceM: number; // vypočtené z bodů trasy, nebo odhad
-  isEstimate: boolean; // vzdušná vzdálenost × 1,3 (žádné použitelné body)
+  distanceM: number; // z bodů GPS (mezi body vzdušnou čarou) nebo odhad - původní hodnota
+  isEstimate: boolean; // žádné použitelné body
+  // Dopočet po silnici (MKDirections) - mezery mezi body > 300 m, začátek
+  // a konec; null = zatím nedopočítáno. Km přejezdu = ruční ?? silnice ?? GPS.
+  roadDistanceM: number | null;
+  roadStatus: 'pending' | 'done' | 'none' | null; // pending = čeká na síť
+  roadNote: string | null; // rozpad dopočtu (deník, detail přejezdu)
   pointCount: number;
   kmOverride: number | null; // ručně opravené km
   isPrivate: boolean; // soukromá jízda - nepočítá se do pracovních km
@@ -153,7 +158,8 @@ export type DebugEventType =
   | 'trip_end'
   | 'trip'
   | 'backup'
-  | 'reminder';
+  | 'reminder'
+  | 'geofence_register';
 
 export interface DebugLogEntry {
   id: number;

@@ -103,7 +103,12 @@ const KEY_GEOFENCE_SIGNATURE = 'geofence_signature';
 const KEY_GEOFENCE_REGISTERED_AT = 'geofence_registered_at';
 const GEOFENCE_SETTLE_MS = 15 * 1000;
 
-export async function refreshGeofences(): Promise<void> {
+// `force` - registrovat znovu i beze změny otisku (po uložení/smazání
+// místa: v terénu se geofence nově uloženého místa zaregistrovala až při
+// dalším otevření appky). `reason` -> výsledek do ladicího deníku.
+export async function refreshGeofences(options: { force?: boolean; reason?: string } = {}): Promise<void> {
+  const settings = await getSettings();
+  if (!settings.locationTrackingEnabled || settings.locationMode !== 'economical') return;
   const places = await listPlaces();
   if (places.length === 0) {
     await stopGeofencing();
@@ -140,11 +145,31 @@ export async function refreshGeofences(): Promise<void> {
     .join('|');
 
   const started = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK_NAME).catch(() => false);
-  if (started && (await getInternalValue(KEY_GEOFENCE_SIGNATURE)) === signature) return;
+  if (!options.force && started && (await getInternalValue(KEY_GEOFENCE_SIGNATURE)) === signature) return;
 
   await setInternalValue(KEY_GEOFENCE_REGISTERED_AT, String(Date.now()));
-  await Location.startGeofencingAsync(GEOFENCE_TASK_NAME, regions);
-  await setInternalValue(KEY_GEOFENCE_SIGNATURE, signature);
+  try {
+    await Location.startGeofencingAsync(GEOFENCE_TASK_NAME, regions);
+    await setInternalValue(KEY_GEOFENCE_SIGNATURE, signature);
+    await addDebugLogEntry({
+      timestamp: new Date().toISOString(),
+      eventType: 'geofence_register',
+      detail: `registrace ${regions.length} míst (${options.reason ?? 'změna míst'}): ${regions.map((r) => `#${r.identifier}`).join(', ')}`,
+      batteryLevel: null,
+      latitude: null,
+      longitude: null,
+    });
+  } catch (err) {
+    await addDebugLogEntry({
+      timestamp: new Date().toISOString(),
+      eventType: 'error',
+      detail: `registrace geofence SELHALA (${options.reason ?? 'změna míst'}): ${err instanceof Error ? err.message : String(err)}`,
+      batteryLevel: null,
+      latitude: null,
+      longitude: null,
+    });
+    throw err;
+  }
 }
 
 async function stopGeofencing(): Promise<void> {
@@ -408,6 +433,14 @@ let listenersRegistered = false;
 export async function initLocationTracking(): Promise<void> {
   if (!listenersRegistered) {
     listenersRegistered = true;
+    // Při každém otevření appky: dorovnat geofence (pojistka) a vyzvednout
+    // frontu událostí a odpovědí na upozornění.
+    AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      refreshGeofences({ reason: 'otevření appky' }).catch(() => {});
+      processNativeQueue().catch(() => {});
+      processNotificationResponses().catch(() => {});
+    });
     // Obsah živé události se nečte - je i ve frontě, zpracuje se odtamtud.
     VisitMonitorModule.addListener('onVisit', () => {
       processNativeQueue().catch(() => {});

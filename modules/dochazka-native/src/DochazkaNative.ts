@@ -60,6 +60,8 @@ declare class DochazkaNativeModule extends NativeModule<DochazkaNativeEvents> {
   backgroundRefreshStatus(): Promise<'available' | 'denied' | 'restricted' | 'unknown'>;
   // --- snímek mapy (PDF výkaz) - PNG v base64; bez internetu chyba ---
   mapSnapshot(routes: number[][][], stops: number[][], labels: string[], width: number, height: number): Promise<string>;
+  // --- vzdálenost po silnici (metry, -1 = trasa nenalezena; chyba = bez sítě) ---
+  roadDistance(fromLat: number, fromLon: number, toLat: number, toLon: number): Promise<number>;
   // --- místní upozornění ---
   requestNotificationPermission(): Promise<boolean>;
   getNotificationPermission(): Promise<'granted' | 'denied' | 'undetermined'>;

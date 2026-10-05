@@ -218,11 +218,12 @@ async function migrateAddCategoryKind(db: SQLite.SQLiteDatabase): Promise<void> 
 // telefonu se nesmí ztratit". Migrace samy nic fyzicky nemažou (jen
 // is_deleted / přesun do *_removed tabulek).
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 // Záloha se dělá před první čekající migrací; jméno podle verze, ze které
 // se migruje (existující záloha se nikdy nepřepisuje).
 function backupFileName(fromVersion: number): string {
   if (fromVersion < 2) return 'dochazka-zaloha-pred-opravami-2.db';
+  if (fromVersion === 4) return 'dochazka-zaloha-pred-opravami-etapy-3.db';
   // v2 -> "před etapou 3", v3 -> "před etapou 4" (verze DB = číslo etapy)
   return `dochazka-zaloha-pred-etapou-${fromVersion + 1}.db`;
 }
@@ -261,6 +262,10 @@ async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: 
   if (version < 4) {
     await migrateV4Reminders(db);
     await db.execAsync('PRAGMA user_version = 4');
+  }
+  if (version < 5) {
+    await migrateV5RoadDistance(db);
+    await db.execAsync('PRAGMA user_version = 5');
   }
 }
 
@@ -547,6 +552,15 @@ async function migrateV4Reminders(db: SQLite.SQLiteDatabase): Promise<void> {
       updated_at TEXT NOT NULL
     );
   `);
+}
+
+// Oprava po terénním testu etapy 3 - km po silnici. Jen nové sloupce;
+// stávající přejezdy se dopočítají po silnici (road_status NULL = čeká),
+// původní GPS hodnota (distance_m) zůstává.
+async function migrateV5RoadDistance(db: SQLite.SQLiteDatabase): Promise<void> {
+  await addColumnIfMissing(db, 'trips', 'road_distance_m', 'REAL');
+  await addColumnIfMissing(db, 'trips', 'road_status', 'TEXT');
+  await addColumnIfMissing(db, 'trips', 'road_note', 'TEXT');
 }
 
 export function normalizeIso(value: string): string {
@@ -1236,6 +1250,9 @@ interface TripRow {
   distance_m: number;
   is_estimate: number;
   point_count: number;
+  road_distance_m: number | null;
+  road_status: Trip['roadStatus'];
+  road_note: string | null;
   km_override: number | null;
   is_private: number;
   vehicle_category_id: number | null;
@@ -1268,6 +1285,9 @@ function mapTrip(row: TripRow): TripWithState {
     distanceM: row.distance_m,
     isEstimate: row.is_estimate === 1,
     pointCount: row.point_count,
+    roadDistanceM: row.road_distance_m,
+    roadStatus: row.road_status,
+    roadNote: row.road_note,
     kmOverride: row.km_override,
     isPrivate: row.is_private === 1,
     vehicleCategoryId: row.vehicle_category_id,
@@ -1344,11 +1364,19 @@ export async function applyTripPlan(plan: {
     const assigned: { id: number; t: TripComputedFields }[] = [];
     for (const u of plan.updates) {
       await txn.runAsync(
-        `UPDATE trips SET start_at = ?, end_at = ?, from_place_id = ?, from_latitude = ?, from_longitude = ?,
+        // Změnila se trasa (jiné body / konce) -> dopočet po silnici znovu.
+        `UPDATE trips SET
+           road_status = CASE WHEN abs(distance_m - ?) > 1 OR point_count != ? OR start_at != ? OR end_at != ? THEN NULL ELSE road_status END,
+           road_distance_m = CASE WHEN abs(distance_m - ?) > 1 OR point_count != ? OR start_at != ? OR end_at != ? THEN NULL ELSE road_distance_m END,
+           start_at = ?, end_at = ?, from_place_id = ?, from_latitude = ?, from_longitude = ?,
            to_place_id = ?, to_latitude = ?, to_longitude = ?, distance_m = ?, is_estimate = ?, point_count = ?,
            gps_first_point_at = ? ${u.revive ? ', is_deleted = 0, deleted_by = NULL' : ''}
          WHERE id = ?`,
-        [...computedParams(u.fields), u.id]
+        [
+          u.fields.distanceM, u.fields.pointCount, u.fields.startAt, u.fields.endAt,
+          u.fields.distanceM, u.fields.pointCount, u.fields.startAt, u.fields.endAt,
+          ...computedParams(u.fields), u.id,
+        ]
       );
       assigned.push({ id: u.id, t: u.fields });
     }
@@ -1422,7 +1450,7 @@ export async function getMonthTripKm(year: number, month: number): Promise<Recor
   const from = new Date(year, month - 1, 1).toISOString();
   const to = new Date(year, month, 1).toISOString();
   const rows = await db.getAllAsync<{ start_at: string; km: number }>(
-    `SELECT start_at, COALESCE(km_override, distance_m / 1000.0) as km FROM trips
+    `SELECT start_at, COALESCE(km_override, COALESCE(road_distance_m, distance_m) / 1000.0) as km FROM trips
      WHERE is_deleted = 0 AND is_private = 0 AND start_at >= ? AND start_at < ?`,
     [from, to]
   );
@@ -1451,7 +1479,28 @@ export async function updateTripUserFields(
 export async function discardTripRoute(id: number): Promise<void> {
   const db = await getDb();
   await db.runAsync('UPDATE route_points SET trip_id = -1 WHERE trip_id = ?', [id]);
-  await db.runAsync('UPDATE trips SET user_edited = 1 WHERE id = ?', [id]);
+  await db.runAsync('UPDATE trips SET user_edited = 1, road_status = NULL, road_distance_m = NULL WHERE id = ?', [id]);
+}
+
+// Přejezdy čekající na dopočet po silnici (nové / změněné / bez sítě).
+export async function listTripsNeedingRoad(limit: number): Promise<TripWithState[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<TripRow>(
+    `SELECT * FROM trips WHERE is_deleted = 0 AND (road_status IS NULL OR road_status = 'pending') AND end_at <= ?
+     ORDER BY end_at DESC LIMIT ?`,
+    [new Date().toISOString(), limit]
+  );
+  return rows.map(mapTrip);
+}
+
+export async function setTripRoad(id: number, status: 'pending' | 'done' | 'none', distanceM: number | null, note: string | null): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE trips SET road_status = ?, road_distance_m = ?, road_note = ? WHERE id = ?', [status, distanceM, note, id]);
+}
+
+// Body přejezdu pro dopočet (bez zahozených).
+export async function listRoutePointsForTrip(tripId: number): Promise<RoutePoint[]> {
+  return (await listRoutePointsForTrips([tripId])).get(tripId) ?? [];
 }
 
 export async function deleteTrip(id: number): Promise<void> {
