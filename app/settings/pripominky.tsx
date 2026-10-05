@@ -70,7 +70,8 @@ export default function PripominkyScreen() {
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.hint}>
           Upozornění s návrhem zápisu (stroj naučený pro místo, hodiny po odečtení přestávky). Z upozornění jde rovnou zapsat
-          podržením. Nikdy pro soukromá místa, jen nezapsané pobyty a jen v časovém okně záznamu.
+          podržením. Nikdy pro soukromá místa, jen nezapsané pobyty a jen v časovém okně záznamu. U neznámého místa jde
+          z upozornění rovnou uložit pracovní místo.
         </Text>
 
         <ToggleRow
@@ -82,12 +83,21 @@ export default function PripominkyScreen() {
         {settings.reminderOnDeparture && (
           <>
             <View style={styles.row}>
-              <Text style={styles.label}>Jen po pobytu aspoň</Text>
+              <Text style={styles.label}>Pracovní místo od</Text>
               <NumPad
                 value={settings.reminderMinStayMinutes}
                 step={5}
                 unitLabel="min"
                 onChange={(v) => patch({ reminderMinStayMinutes: Math.max(0, Math.round(v)) })}
+              />
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>Neznámé místo až od</Text>
+              <NumPad
+                value={settings.reminderUnknownMinStayMinutes}
+                step={15}
+                unitLabel="min"
+                onChange={(v) => patch({ reminderUnknownMinStayMinutes: Math.max(0, Math.round(v)) })}
               />
             </View>
             <View style={styles.row}>

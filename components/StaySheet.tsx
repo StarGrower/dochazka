@@ -112,7 +112,7 @@ export default function StaySheet({ target, categories, settings, onClose, onSav
           value={row.quantity}
           unitLabel={unitLabel}
           big={big}
-          onChange={(v) => updateRow(index, { quantity: row.unit === 'hour' ? applyRounding(v, settings.roundingMinutes) : v })}
+          onChange={(v) => updateRow(index, { quantity: row.unit === 'hour' ? applyRounding(v, settings) : v })}
         />
         <TouchableOpacity
           style={[styles.vb, !big && styles.vbSmall]}

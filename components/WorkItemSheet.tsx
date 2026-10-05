@@ -117,7 +117,7 @@ export default function WorkItemSheet({
           step={step}
           unitLabel={unit === 'hour' ? 'h' : unit === 'day' ? 'dní' : 'km'}
           onChange={setQuantity}
-          roundTypedValue={unit === 'hour' ? (v) => applyRounding(v, settings.roundingMinutes) : undefined}
+          roundTypedValue={unit === 'hour' ? (v) => applyRounding(v, settings) : undefined}
         />
       </View>
       <Text style={styles.amount}>

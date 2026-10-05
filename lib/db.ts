@@ -794,6 +794,7 @@ export async function getMonthSummary(
 const SETTINGS_KEYS: { [K in keyof AppSettings]: string } = {
   defaultDayLengthHours: 'default_day_length_hours',
   roundingMinutes: 'rounding_minutes',
+  roundingMode: 'rounding_mode',
   numpadStepHours: 'numpad_step_hours',
   autoSubtractBreak: 'auto_subtract_break',
   breakMinutes: 'break_minutes',
@@ -815,6 +816,7 @@ const SETTINGS_KEYS: { [K in keyof AppSettings]: string } = {
   minStayMinutes: 'min_stay_minutes',
   reminderOnDeparture: 'reminder_on_departure',
   reminderMinStayMinutes: 'reminder_min_stay_minutes',
+  reminderUnknownMinStayMinutes: 'reminder_unknown_min_stay_minutes',
   reminderDelayMinutes: 'reminder_delay_minutes',
   reminderOnArriveHome: 'reminder_on_arrive_home',
   reminderEvening: 'reminder_evening',
@@ -1554,7 +1556,7 @@ export async function setPlaceSuggestionLock(placeId: number, categoryId: number
 
 export interface ReminderState {
   key: string;
-  state: 'scheduled' | 'sent' | 'evening' | 'dismissed';
+  state: 'scheduled' | 'sent' | 'evening' | 'dismissed' | 'written';
   fireAt: string | null;
   payload: string;
 }

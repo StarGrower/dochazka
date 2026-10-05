@@ -28,12 +28,14 @@ const DEFAULT_COORDS = { latitude: 50.0755, longitude: 14.4378 }; // Praha - jen
 export default function PlaceEditScreen() {
   // `lat`/`lon` - předvyplnění z Detailu dne ("Neznámé místo" -> "Uložit
   // jako nové místo", viz app/day/[date].tsx), `rebuildFrom` (ISO) - od
-  // kdy přepočítat pobyty, ať se ten pobyt hned přiřadí k novému místu.
-  const { id, lat, lon, rebuildFrom } = useLocalSearchParams<{
+  // kdy přepočítat pobyty, ať se ten pobyt hned přiřadí k novému místu;
+  // `name` - návrh názvu podle obce (upozornění "Uložit jako pracovní místo").
+  const { id, lat, lon, rebuildFrom, name: suggestedName } = useLocalSearchParams<{
     id?: string;
     lat?: string;
     lon?: string;
     rebuildFrom?: string;
+    name?: string;
   }>();
   const placeId = id ? Number(id) : null;
 
@@ -61,6 +63,7 @@ export default function PlaceEditScreen() {
         }
       } else if (lat && lon) {
         setCoords({ latitude: Number(lat), longitude: Number(lon) });
+        if (suggestedName) setName(suggestedName);
       } else {
         try {
           const permission = await Location.getForegroundPermissionsAsync();
@@ -75,7 +78,7 @@ export default function PlaceEditScreen() {
       }
       setLoading(false);
     })();
-  }, [placeId, lat, lon]);
+  }, [placeId, lat, lon, suggestedName]);
 
   const handleMapClick = useCallback((event: { coordinates: { latitude?: number; longitude?: number } }) => {
     if (event.coordinates.latitude === undefined || event.coordinates.longitude === undefined) return;

@@ -11,6 +11,7 @@ import { backupsToDelete, formatRecoveryKey, parseRecoveryKey } from '../lib/bac
 import { buildDayTimeline } from '../lib/dayTimeline';
 import { proposeStayRecord } from '../lib/stayProposal';
 import { DEFAULT_SETTINGS, type WorkCategory } from '../lib/types';
+import { applyRounding } from '../lib/workCalc';
 import { computeGapTrips, filterRoutePoints, matchTrips, type PlanVisit } from '../lib/tripPlan';
 import { computeVisits, type EngineEvent, type EnginePlace, type EngineVisit } from '../lib/visitEngine';
 
@@ -181,6 +182,14 @@ const tests: Array<[string, () => void]> = [
     assert.equal(p.explanation, '8 h 15 min − 30 min přestávka, zaokrouhleno na 0,5 h');
     assert.equal(p.locked, true);
     assert.equal(proposeStayRecord(ms, null, settings, categories)?.category.name, 'Tatra'); // bez návrhu první stroj
+  }],
+  ['zaokrouhlení: nejbližší / dolů / nahoru, bez chyb plovoucí čárky', () => {
+    const r = (h: number, mode: 'nearest' | 'down' | 'up') => applyRounding(h, { roundingMinutes: 30, roundingMode: mode });
+    assert.equal(r(7.75, 'nearest'), 8);
+    assert.equal(r(7.75, 'down'), 7.5);
+    assert.equal(r(7.6, 'up'), 8);
+    assert.equal(r(7.5000001, 'up'), 7.5);
+    assert.equal(applyRounding(7.33, { roundingMinutes: 0, roundingMode: 'down' }), 7.33);
   }],
 ];
 

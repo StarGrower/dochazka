@@ -122,6 +122,19 @@ export default function ZapisySettingsScreen() {
               ]}
             />
 
+            {settings.roundingMinutes > 0 && (
+              <SegmentedControl
+                label="Směr zaokrouhlení"
+                value={settings.roundingMode}
+                onChange={(v) => patch({ roundingMode: v })}
+                options={[
+                  { label: 'Nejbližší', value: 'nearest' },
+                  { label: 'Dolů', value: 'down' },
+                  { label: 'Nahoru', value: 'up' },
+                ]}
+              />
+            )}
+
             <SegmentedControl
               label="Krok číselníku"
               value={settings.numpadStepHours}

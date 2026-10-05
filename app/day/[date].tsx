@@ -398,7 +398,7 @@ export default function DayDetailScreen() {
     }
     let hours = totalMs / 3600000;
     if (settings.autoSubtractBreak) hours = Math.max(0, hours - settings.breakMinutes / 60);
-    hours = applyRounding(hours, settings.roundingMinutes);
+    hours = applyRounding(hours, settings);
     if (hours <= 0) {
       Alert.alert(
         'Nic k navržení',

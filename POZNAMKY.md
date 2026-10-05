@@ -125,6 +125,22 @@ míst se z mapy ořežou.**
 nastavená). Ověřeno lokálně z v0 i z v3. (Oprava: název zálohy před
 migrací = cílová verze, `…pred-etapou-${from + 1}`.)
 
+### Úpravy po etapě 4 (rozhodnutí uživatele, do stejného buildu s opravami z terénu)
+
+- **Směr zaokrouhlení** (Nastavení -> Zápisy, jen když je zaokrouhlení
+  zapnuté): nejbližší (výchozí) / dolů / nahoru - `applyRounding(hours,
+  settings)` platí všude (číselník, návrh z pobytů, okno Zapsat pobyt,
+  připomenutí); vysvětlení "zaokrouhleno dolů na 0,5 h". Tolerance proti
+  chybám plovoucí čárky (7,5000001 h nahoru = 7,5 h).
+- **Připomenutí i pro neznámá místa** - až od pobytu 60 min (zvlášť
+  nastavitelné, `reminderUnknownMinStayMinutes`), neznámé pobyty do
+  300 m = jedno místo, název "Neznámé místo · u <obec>" (geokódování při
+  plánování, bez sítě jen "Neznámé místo"). Akce: Zapsat (položka bez
+  místa, pobyt se označí `written`) / **Uložit jako pracovní místo**
+  (otevře uložení místa s návrhem názvu "Stavba <obec>", pak přepočet
+  pobytů) / Připomenout večer / Dnes nezapisovat. iOS ukáže max. 4 akce,
+  proto u neznámého místa místo "Upravit v aplikaci".
+
 ### Etapa 4 - co testovat
 
 1. **Záloha:** Nastavení -> Záloha -> VYBRAT SLOŽKU (iCloud Drive ->

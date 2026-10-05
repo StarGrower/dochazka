@@ -25,14 +25,20 @@ export function defaultQuantityFor(unit: RateUnit, settings: AppSettings): numbe
   return 0;
 }
 
-// Zaokrouhlení zadaného množství hodin na nejbližší krok podle
-// nastavení (0 = "bez") - zadání "zaokrouhlení času". Platí jen pro
-// HODINOVÉ položky - dny/km se nezaokrouhlují.
-export function applyRounding(hours: number, roundingMinutes: AppSettings['roundingMinutes']): number {
-  if (roundingMinutes === 0) return hours;
-  const stepHours = roundingMinutes / 60;
-  return Math.round(hours / stepHours) * stepHours;
+// Zaokrouhlení zadaného množství hodin na krok podle nastavení (0 =
+// "bez") - zadání "zaokrouhlení času"; směr nejbližší / dolů / nahoru
+// (Nastavení -> Zápisy). Platí jen pro HODINOVÉ položky - dny/km se
+// nezaokrouhlují.
+export function applyRounding(hours: number, settings: Pick<AppSettings, 'roundingMinutes' | 'roundingMode'>): number {
+  if (settings.roundingMinutes === 0) return hours;
+  const stepHours = settings.roundingMinutes / 60;
+  // Drobná tolerance, ať 7,5000001 h nezaokrouhlí nahoru na 8 h.
+  const steps = Math.round((hours / stepHours) * 1e6) / 1e6;
+  const rounded = settings.roundingMode === 'down' ? Math.floor(steps) : settings.roundingMode === 'up' ? Math.ceil(steps) : Math.round(steps);
+  return Math.round(rounded * stepHours * 100) / 100;
 }
+
+export const ROUNDING_MODE_LABEL: Record<AppSettings['roundingMode'], string> = { nearest: '', down: 'dolů ', up: 'nahoru ' };
 
 // --- příplatky (oprava 2, C2) ---
 //

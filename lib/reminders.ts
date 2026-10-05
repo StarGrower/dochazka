@@ -11,9 +11,12 @@
 //
 // Pobyt = jedno pracovní místo za den (víc pobytů na stejném místě se
 // sečte); "zapsaný" = v ten den existuje zápis s tímhle místem
-// (day_work_records.place_id). Nikdy pro soukromá a neznámá místa.
+// (day_work_records.place_id). Nikdy pro soukromá místa. Neznámá místa
+// (rozhodnutí po etapě 4) až od delšího pobytu (výchozí 60 min) - zapsaný
+// je pobyt, u kterého proběhl zápis z upozornění (stav 'written'); akce
+// "Uložit jako pracovní místo" otevře uložení místa s názvem podle obce.
 
-import { router } from 'expo-router';
+import { router, type Href } from 'expo-router';
 
 import DochazkaNative, { type NotificationAction, type NotificationResponse } from '../modules/dochazka-native/src/DochazkaNative';
 import {
@@ -30,6 +33,8 @@ import {
   type ReminderState,
 } from './db';
 import { buildDayTimeline, localDayBounds, type TimelineStay } from './dayTimeline';
+import { geocodeKey, nearLocalityLabel, resolveLocalities } from './geocode';
+import { distanceMeters } from './geo';
 import { formatNumberCs, formatQuantity, todayIso } from './format';
 import { isWorkday } from './holidays';
 import { formatDurationHM, proposeStayRecord, type StayProposal } from './stayProposal';
@@ -40,7 +45,10 @@ import { priceForRecord } from './workCalc';
 // Pobyt na pracovním místě za den (víc pobytů na místě sečtených).
 export interface WorkStay {
   date: string;
-  placeId: number;
+  placeId: number | null; // null = neznámé místo
+  key: string; // "<placeId>" nebo "u<lat>,<lon>" (klíč připomenutí)
+  latitude: number | null; // neznámé místo
+  longitude: number | null;
   placeName: string;
   firstStartMs: number;
   lastEndMs: number | null; // null = pořád na místě
@@ -50,7 +58,10 @@ export interface WorkStay {
 interface StayPayload {
   kind: 'stay' | 'day';
   date: string;
-  placeId?: number;
+  placeId?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  locality?: string | null;
   categoryId?: number;
   unit?: string;
   quantity?: number;
@@ -61,36 +72,51 @@ const hhmm = (ms: number) => {
   return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
 
-export async function workStaysForDate(date: string, nowMs = Date.now()): Promise<WorkStay[]> {
+// `includeUnknown` - i neznámá místa (víc pobytů do 300 m = jedno místo).
+export async function workStaysForDate(date: string, nowMs = Date.now(), includeUnknown = false): Promise<WorkStay[]> {
   const visits = await getVisitsForDay(date);
   const stays = buildDayTimeline(visits, date, nowMs).filter(
     (i): i is TimelineStay<VisitWithPlace> =>
-      i.kind === 'stay' && i.visit.placeId !== null && !i.visit.placeIsPrivate && !i.visit.startUncertain
+      i.kind === 'stay' &&
+      !i.visit.placeIsPrivate &&
+      !i.visit.startUncertain &&
+      (i.visit.placeId !== null || (includeUnknown && i.visit.unknownLatitude !== null && i.visit.unknownLongitude !== null))
   );
-  const byPlace = new Map<number, WorkStay>();
+  const groups: WorkStay[] = [];
   for (const s of stays) {
-    const placeId = s.visit.placeId as number;
-    const existing = byPlace.get(placeId);
+    const v = s.visit;
     const endMs = s.ongoing ? null : s.segEndMs;
-    if (!existing) {
-      byPlace.set(placeId, {
-        date,
-        placeId,
-        placeName: s.visit.placeName ?? 'Místo',
-        firstStartMs: s.segStartMs,
-        lastEndMs: endMs,
-        durationMs: s.segEndMs - s.segStartMs,
-      });
-    } else {
+    const existing = groups.find((g) =>
+      v.placeId !== null
+        ? g.placeId === v.placeId
+        : g.placeId === null &&
+          g.latitude !== null &&
+          g.longitude !== null &&
+          distanceMeters(g.latitude, g.longitude, v.unknownLatitude as number, v.unknownLongitude as number) <= 300
+    );
+    if (existing) {
       existing.durationMs += s.segEndMs - s.segStartMs;
       existing.lastEndMs = endMs;
+      continue;
     }
+    groups.push({
+      date,
+      placeId: v.placeId,
+      key: v.placeId !== null ? String(v.placeId) : `u${(v.unknownLatitude as number).toFixed(3)},${(v.unknownLongitude as number).toFixed(3)}`,
+      latitude: v.placeId === null ? v.unknownLatitude : null,
+      longitude: v.placeId === null ? v.unknownLongitude : null,
+      placeName: v.placeName ?? 'Neznámé místo',
+      firstStartMs: s.segStartMs,
+      lastEndMs: endMs,
+      durationMs: s.segEndMs - s.segStartMs,
+    });
   }
-  return [...byPlace.values()].sort((a, b) => a.firstStartMs - b.firstStartMs);
+  return groups.sort((a, b) => a.firstStartMs - b.firstStartMs);
 }
 
 export async function proposalForStay(stay: WorkStay, settings: AppSettings, categories: WorkCategory[]): Promise<StayProposal | null> {
-  return proposeStayRecord(stay.durationMs, await getPlaceSuggestion(stay.placeId), settings, categories);
+  const suggestion = stay.placeId !== null ? await getPlaceSuggestion(stay.placeId) : null;
+  return proposeStayRecord(stay.durationMs, suggestion, settings, categories);
 }
 
 // Místo "Stavba X" -> "Odjezd ze stavby X" (jako v předloze), jinak "Odjezd: <místo>".
@@ -134,41 +160,72 @@ export async function evaluateReminders(): Promise<void> {
     const categories = await listCategories();
     const recorded = await recordedPlacesForDate(date);
     const win = windowBounds(date, settings);
-    const stays = (await workStaysForDate(date, now)).filter(
-      (s) => !recorded.has(s.placeId) && s.firstStartMs < win.end && (s.lastEndMs ?? now) > win.start
+    const depKey = (st: WorkStay) => `dep|${date}|${st.key}`;
+    const stays = (await workStaysForDate(date, now, true)).filter(
+      (st) =>
+        (st.placeId === null || !recorded.has(st.placeId)) &&
+        states.get(depKey(st))?.state !== 'written' &&
+        st.firstStartMs < win.end &&
+        (st.lastEndMs ?? now) > win.start
     );
-    const proposals = new Map<number, StayProposal | null>();
-    for (const s of stays) proposals.set(s.placeId, await proposalForStay(s, settings, categories));
+    const proposals = new Map<string, StayProposal | null>();
+    for (const st of stays) proposals.set(st.key, await proposalForStay(st, settings, categories));
+    // Neznámá místa -> "Neznámé místo · u <obec>" (bez sítě jen "Neznámé místo").
+    const unknownPoints = stays.flatMap((st) => (st.latitude !== null && st.longitude !== null ? [{ latitude: st.latitude, longitude: st.longitude }] : []));
+    const localities = unknownPoints.length > 0 ? await resolveLocalities(unknownPoints).catch(() => new Map<string, string>()) : new Map<string, string>();
+    const localityOf = (st: WorkStay) => (st.latitude !== null && st.longitude !== null ? localities.get(geocodeKey(st.latitude, st.longitude)) ?? null : null);
+    for (const st of stays) {
+      const locality = localityOf(st);
+      if (st.placeId === null && locality) st.placeName = `Neznámé místo · ${nearLocalityLabel(locality)}`;
+    }
 
     // Po odjezdu z pracovního místa.
     if (settings.reminderOnDeparture) {
       for (const s of stays) {
-        if (s.lastEndMs === null || s.durationMs < settings.reminderMinStayMinutes * 60000) continue;
-        const key = `dep|${date}|${s.placeId}`;
+        const minStay = s.placeId === null ? settings.reminderUnknownMinStayMinutes : settings.reminderMinStayMinutes;
+        if (s.lastEndMs === null || s.durationMs < minStay * 60000) continue;
+        const key = depKey(s);
         const state = states.get(key);
         if (state && state.state !== 'scheduled') continue; // už odesláno / večer
-        const p = proposals.get(s.placeId);
+        const p = proposals.get(s.key);
+        // iOS ukáže nejvýš 4 akce - u neznámého místa místo "Upravit"
+        // "Uložit jako pracovní místo" (taky otevře appku).
         const actions: NotificationAction[] = [
           ...(p ? [{ id: 'write', title: `Zapsat: ${proposalText(p)}` }] : []),
-          { id: 'edit', title: 'Upravit v aplikaci', foreground: true },
+          s.placeId === null
+            ? { id: 'saveplace', title: 'Uložit jako pracovní místo', foreground: true }
+            : { id: 'edit', title: 'Upravit v aplikaci', foreground: true },
           { id: 'evening', title: 'Připomenout večer' },
           { id: 'skip', title: 'Dnes nezapisovat', destructive: true },
         ];
         desired.set(key, {
-          title: departureTitle(s.placeName),
+          title: s.placeId === null ? `Odjezd: ${s.placeName}` : departureTitle(s.placeName),
           body:
             `${hhmm(s.firstStartMs)}–${hhmm(s.lastEndMs)} · ${formatDurationHM(s.durationMs)} na místě` +
             (p ? `\nNávrh: ${proposalText(p)}${settings.autoSubtractBreak ? ` (−${settings.breakMinutes} min přestávka)` : ''}. Podrž pro rychlý zápis.` : ''),
           fireAt: s.lastEndMs + settings.reminderDelayMinutes * 60000,
           actions,
-          payload: { kind: 'stay', date, placeId: s.placeId, categoryId: p?.category.id, unit: p?.unit, quantity: p?.quantity },
+          payload: {
+            kind: 'stay',
+            date,
+            placeId: s.placeId,
+            latitude: s.latitude,
+            longitude: s.longitude,
+            locality: localityOf(s),
+            categoryId: p?.category.id,
+            unit: p?.unit,
+            quantity: p?.quantity,
+          },
         });
       }
     }
 
-    const finished = stays.filter((s) => s.lastEndMs !== null);
+    // Souhrny: pracovní místa vždy, neznámá jen po dost dlouhém pobytu.
+    const finished = stays.filter(
+      (st) => st.lastEndMs !== null && (st.placeId !== null || st.durationMs >= settings.reminderUnknownMinStayMinutes * 60000)
+    );
     const summary = (list: WorkStay[]) =>
-      list.map((s) => `${s.placeName} ${hhmm(s.firstStartMs)}–${hhmm(s.lastEndMs ?? now)}` + (proposals.get(s.placeId) ? ` · ${proposalText(proposals.get(s.placeId) as StayProposal)}` : '')).join('\n');
+      list.map((s) => `${s.placeName} ${hhmm(s.firstStartMs)}–${hhmm(s.lastEndMs ?? now)}` + (proposals.get(s.key) ? ` · ${proposalText(proposals.get(s.key) as StayProposal)}` : '')).join('\n');
     const dayActions: NotificationAction[] = [
       { id: 'edit', title: 'Otevřít a zapsat', foreground: true },
       { id: 'skip', title: 'Dnes nezapisovat', destructive: true },
@@ -190,7 +247,7 @@ export async function evaluateReminders(): Promise<void> {
     }
 
     // Večerní souhrn (jen když něco chybí) + "Připomenout večer" u pobytu.
-    const snoozed = finished.filter((s) => states.get(`dep|${date}|${s.placeId}`)?.state === 'evening');
+    const snoozed = finished.filter((st) => states.get(depKey(st))?.state === 'evening');
     const eveningList = settings.reminderEvening ? finished : snoozed;
     const eveningAt = new Date(localDayBounds(date).startMs);
     eveningAt.setMinutes(settings.reminderEveningMinutes);
@@ -235,14 +292,14 @@ export function evaluateRemindersSafe(): Promise<void> {
 
 // --- odpovědi na upozornění ---
 
-async function handleResponse(r: NotificationResponse): Promise<{ openDay: string | null; placeId: number | null }> {
+async function handleResponse(r: NotificationResponse): Promise<string | null> {
   let payload: StayPayload | null = null;
   try {
     payload = JSON.parse(r.data) as StayPayload;
   } catch {
     payload = null;
   }
-  if (!payload) return { openDay: null, placeId: null };
+  if (!payload || !payload.date) return null;
   const { date } = payload;
 
   await addDebugLogEntry({
@@ -256,9 +313,11 @@ async function handleResponse(r: NotificationResponse): Promise<{ openDay: strin
 
   switch (r.actionId) {
     case 'write': {
-      if (payload.kind !== 'stay' || !payload.placeId || !payload.categoryId || payload.quantity === undefined) break;
-      // Mezitím zapsané (třeba v appce) - nezapisovat dvakrát.
-      if ((await recordedPlacesForDate(date)).has(payload.placeId)) break;
+      if (payload.kind !== 'stay' || !payload.categoryId || payload.quantity === undefined) break;
+      // Mezitím zapsané (třeba v appce nebo druhým klepnutím) - nezapisovat dvakrát.
+      if (payload.placeId && (await recordedPlacesForDate(date)).has(payload.placeId)) break;
+      const states = await listReminderStates(r.notificationId);
+      if (states.some((st) => st.key === r.notificationId && st.state === 'written')) break;
       const settings = await getSettings();
       const category = (await listCategories()).find((c) => c.id === payload.categoryId);
       if (!category) break;
@@ -270,8 +329,9 @@ async function handleResponse(r: NotificationResponse): Promise<{ openDay: strin
         unit,
         ...priceForRecord(date, category, unit, settings),
         source: 'reminder',
-        placeId: payload.placeId,
+        placeId: payload.placeId ?? null,
       });
+      await setReminderState(r.notificationId, 'written', null, '');
       await addDebugLogEntry({
         timestamp: new Date().toISOString(),
         eventType: 'reminder',
@@ -288,14 +348,19 @@ async function handleResponse(r: NotificationResponse): Promise<{ openDay: strin
     case 'skip':
       await setReminderState(`day|${date}`, 'dismissed', null, '');
       break;
+    case 'saveplace': {
+      if (payload.latitude == null || payload.longitude == null) return `/day/${date}`;
+      const name = payload.locality ? `Stavba ${payload.locality}` : '';
+      return `/settings/place-edit?lat=${payload.latitude}&lon=${payload.longitude}&name=${encodeURIComponent(name)}&rebuildFrom=${encodeURIComponent(`${date}T00:00:00.000Z`)}`;
+    }
     case 'edit':
     case 'open':
-      return { openDay: date, placeId: payload.placeId ?? null };
+      return payload.placeId ? `/day/${date}?stay=${payload.placeId}` : `/day/${date}`;
   }
-  return { openDay: null, placeId: null };
+  return null;
 }
 
-let pendingOpen: { date: string; placeId: number | null } | null = null;
+let pendingOpen: string | null = null;
 
 // Vyzvedne odpovědi z nativní fronty, zpracuje je a přepočítá připomenutí.
 export function processNotificationResponses(): Promise<void> {
@@ -307,8 +372,8 @@ export function processNotificationResponses(): Promise<void> {
       return;
     }
     for (const r of responses) {
-      const result = await handleResponse(r);
-      if (result.openDay) pendingOpen = { date: result.openDay, placeId: result.placeId };
+      const href = await handleResponse(r);
+      if (href) pendingOpen = href;
     }
     if (responses.length > 0) await evaluateReminders();
   }).then(() => {
@@ -326,9 +391,9 @@ export function setNavigationReady(): void {
 
 function openPendingDay(): void {
   if (!navigationReady || !pendingOpen) return;
-  const { date, placeId } = pendingOpen;
+  const href = pendingOpen;
   pendingOpen = null;
-  router.push(placeId ? `/day/${date}?stay=${placeId}` : `/day/${date}`);
+  router.push(href as Href);
 }
 
 let listenerRegistered = false;

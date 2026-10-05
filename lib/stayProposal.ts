@@ -8,7 +8,7 @@
 
 import { formatNumberCs } from './format';
 import type { AppSettings, RateUnit, WorkCategory } from './types';
-import { applyRounding } from './workCalc';
+import { applyRounding, ROUNDING_MODE_LABEL } from './workCalc';
 
 export interface StayProposal {
   category: WorkCategory;
@@ -51,10 +51,10 @@ export function proposeStayRecord(
     hours = Math.max(0, hours - settings.breakMinutes / 60);
     parts.push(`− ${settings.breakMinutes} min přestávka`);
   }
-  const rounded = applyRounding(hours, settings.roundingMinutes);
+  const rounded = applyRounding(hours, settings);
   let explanation = parts.join(' ');
   if (settings.roundingMinutes > 0) {
-    explanation += `, zaokrouhleno na ${formatNumberCs(settings.roundingMinutes / 60)} h`;
+    explanation += `, zaokrouhleno ${ROUNDING_MODE_LABEL[settings.roundingMode]}na ${formatNumberCs(settings.roundingMinutes / 60)} h`;
   }
   return { category, unit, quantity: Math.round(rounded * 100) / 100, explanation, locked: !!suggestion?.locked };
 }

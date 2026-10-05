@@ -176,6 +176,7 @@ export type LocationTrackingMode = 'economical' | 'continuous';
 // (Nastavení -> Zápisy/Aplikace/...) jsou jen vizuální seskupení,
 // datově je to jedna sada hodnot.
 export type RoundingMinutes = 0 | 15 | 30 | 60;
+export type RoundingMode = 'nearest' | 'down' | 'up';
 export type NumpadStepHours = 0.25 | 0.5 | 1;
 export type FontScale = 'normal' | 'large';
 
@@ -183,6 +184,7 @@ export interface AppSettings {
   // --- Zápisy ---
   defaultDayLengthHours: number; // 0 = proměnná pracovní doba (nic se nepředvyplňuje)
   roundingMinutes: RoundingMinutes;
+  roundingMode: RoundingMode; // nejbližší / dolů / nahoru
   numpadStepHours: NumpadStepHours;
   autoSubtractBreak: boolean;
   breakMinutes: number;
@@ -208,6 +210,7 @@ export interface AppSettings {
   // --- Připomenutí zápisu (etapa 4.3) ---
   reminderOnDeparture: boolean; // po odjezdu z pracovního místa
   reminderMinStayMinutes: number; // jen po pobytu aspoň tak dlouhém
+  reminderUnknownMinStayMinutes: number; // neznámá místa - až od tak dlouhého pobytu
   reminderDelayMinutes: number; // odeslat až po tolika minutách (návrat = zrušit)
   reminderOnArriveHome: boolean; // po příjezdu domů souhrn nezapsaných pobytů
   reminderEvening: boolean; // večerní souhrn (jen když něco chybí)
@@ -233,6 +236,7 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   defaultDayLengthHours: 8,
   roundingMinutes: 0,
+  roundingMode: 'nearest',
   numpadStepHours: 0.5,
   autoSubtractBreak: false,
   breakMinutes: 30,
@@ -254,6 +258,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   minStayMinutes: 10,
   reminderOnDeparture: false,
   reminderMinStayMinutes: 30,
+  reminderUnknownMinStayMinutes: 60,
   reminderDelayMinutes: 10,
   reminderOnArriveHome: false,
   reminderEvening: false,
