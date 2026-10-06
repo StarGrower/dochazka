@@ -101,9 +101,28 @@ export default function WorkersScreen() {
         </TouchableOpacity>
       </ScrollView>
 
-      <BottomSheetModal visible={draft !== null} onClose={() => setDraft(null)}>
+      <BottomSheetModal
+        visible={draft !== null}
+        onClose={() => setDraft(null)}
+        footer={
+          <View style={styles.buttons}>
+            {draft?.id != null && !draft.isMe ? (
+              <TouchableOpacity style={styles.secondary} onPress={remove}>
+                <Text style={styles.deleteText}>Odebrat</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={styles.secondary} onPress={() => setDraft(null)}>
+                <Text style={styles.cancelText}>Zrušit</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={styles.primary} onPress={save}>
+              <Text style={styles.primaryText}>ULOŽIT</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
         {draft && (
-          <ScrollView keyboardShouldPersistTaps="handled">
+          <>
             <Text style={styles.modalTitle}>{draft.id ? 'PRACOVNÍK' : 'NOVÝ PRACOVNÍK'}</Text>
             <Text style={styles.label}>Jméno</Text>
             <TextInput style={styles.input} value={draft.name} onChangeText={(t) => setDraft((d) => (d ? { ...d, name: t } : d))} placeholder="Jméno" placeholderTextColor={colors.textMuted} inputAccessoryViewID={KEYBOARD_ACCESSORY_ID} />
@@ -123,19 +142,7 @@ export default function WorkersScreen() {
                 <Text style={styles.hint}>Platí jen pro práci. Stroj se fakturuje sazbou stroje, ať ho řídí kdokoli. Uložené položky se nepřepočítají.</Text>
               </>
             )}
-            <View style={styles.buttons}>
-              {draft.id !== null && !draft.isMe ? (
-                <TouchableOpacity style={styles.secondary} onPress={remove}>
-                  <Text style={styles.deleteText}>Odebrat</Text>
-                </TouchableOpacity>
-              ) : (
-                <View style={styles.flex} />
-              )}
-              <TouchableOpacity style={styles.primary} onPress={save}>
-                <Text style={styles.primaryText}>ULOŽIT</Text>
-              </TouchableOpacity>
-            </View>
-          </ScrollView>
+          </>
         )}
       </BottomSheetModal>
     </SafeAreaView>
@@ -158,7 +165,8 @@ const styles = StyleSheet.create({
   label: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginTop: 12 },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: radii.card, paddingHorizontal: 12, minHeight: 48, color: colors.text, fontFamily: fonts.body, fontSize: fs(16), backgroundColor: colors.background, marginTop: 6 },
   row2: { flexDirection: 'row', gap: 8 },
-  buttons: { flexDirection: 'row', gap: 12, marginTop: 18 },
+  buttons: { flexDirection: 'row', gap: 12 },
+  cancelText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(15) },
   secondary: { flex: 1, height: MIN_TOUCH, alignItems: 'center', justifyContent: 'center' },
   deleteText: { color: colors.danger, fontFamily: fonts.body, fontSize: fs(15) },
   primary: { flex: 1, height: MIN_TOUCH, borderRadius: radii.card, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },

@@ -187,10 +187,35 @@ export default function StrojeScreen() {
         )}
       </ScrollView>
 
-      <BottomSheetModal visible={reimburseOpen} onClose={() => setReimburseOpen(false)}>
+      <BottomSheetModal
+        visible={reimburseOpen}
+        onClose={() => setReimburseOpen(false)}
+        footer={
+          reimburse.length > 0 ? (
+            <TouchableOpacity
+              style={styles.primaryWide}
+              onPress={() =>
+                Alert.alert('Označit proplaceno', `${reimburse.length}× za ${formatKc(reimburseKc)}?`, [
+                  { text: 'Zrušit', style: 'cancel' },
+                  {
+                    text: 'Proplaceno',
+                    onPress: async () => {
+                      await markReimbursed(reimburse.map((e) => e.id));
+                      setReimburseOpen(false);
+                      await load();
+                    },
+                  },
+                ])
+              }
+            >
+              <Text style={styles.primaryText}>OZNAČIT PROPLACENO</Text>
+            </TouchableOpacity>
+          ) : undefined
+        }
+      >
         <Text style={styles.modalTitle}>K PROPLACENÍ</Text>
         <Text style={styles.hintText}>Tankování vlastní kartou nebo hotově, zatím neproplacená.</Text>
-        <ScrollView style={styles.modalList}>
+        <View>
           {reimburse.map((e) => (
             <View key={e.id} style={styles.reRow}>
               <Text style={styles.reText}>
@@ -200,27 +225,7 @@ export default function StrojeScreen() {
             </View>
           ))}
           {reimburse.length === 0 && <Text style={styles.hintText}>Nic k proplacení.</Text>}
-        </ScrollView>
-        {reimburse.length > 0 && (
-          <TouchableOpacity
-            style={styles.primaryWide}
-            onPress={() =>
-              Alert.alert('Označit proplaceno', `${reimburse.length}× za ${formatKc(reimburseKc)}?`, [
-                { text: 'Zrušit', style: 'cancel' },
-                {
-                  text: 'Proplaceno',
-                  onPress: async () => {
-                    await markReimbursed(reimburse.map((e) => e.id));
-                    setReimburseOpen(false);
-                    await load();
-                  },
-                },
-              ])
-            }
-          >
-            <Text style={styles.primaryText}>OZNAČIT PROPLACENO</Text>
-          </TouchableOpacity>
-        )}
+        </View>
       </BottomSheetModal>
     </SafeAreaView>
   );
@@ -264,7 +269,6 @@ const styles = StyleSheet.create({
   danger: { color: colors.danger, fontFamily: fonts.bodySemiBold },
   modalTitle: { color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(16), letterSpacing: 1, marginBottom: 6 },
   hintText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginBottom: 8 },
-  modalList: { maxHeight: 320 },
   reRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border },
   reText: { color: colors.text, fontFamily: fonts.body, fontSize: fs(14), flex: 1 },
   reKc: { color: colors.accent, fontFamily: fonts.headingBold, fontSize: fs(16) },

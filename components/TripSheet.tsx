@@ -3,7 +3,7 @@
 // smazání přejezdu. Nic se neukládá samo - až tlačítkem.
 
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import BottomSheetModal from './BottomSheetModal';
 import NumPad from './NumPad';
@@ -81,8 +81,24 @@ export default function TripSheet({
   const added = trip.workRecordId !== null;
 
   return (
-    <BottomSheetModal visible onClose={onClose}>
-      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+    <BottomSheetModal
+      visible
+      onClose={onClose}
+      footer={
+        <View style={styles.footerRow}>
+          <TouchableOpacity style={styles.secondaryButton} onPress={() => onDelete(trip)}>
+            <Text style={styles.deleteText}>Smazat</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.secondaryButton} onPress={onClose}>
+            <Text style={styles.cancelText}>Zrušit</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.saveButton} onPress={() => onSave(trip, edit)}>
+            <Text style={styles.primaryButtonText}>ULOŽIT</Text>
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      <>
         <Text style={styles.title}>PŘEJEZD</Text>
         <Text style={styles.subtitle}>{title}</Text>
         <Text style={styles.hint}>
@@ -152,20 +168,12 @@ export default function TripSheet({
           )
         )}
 
-        <View style={styles.buttons}>
-          <TouchableOpacity style={styles.secondaryButton} onPress={() => onDelete(trip)}>
-            <Text style={styles.deleteText}>Smazat přejezd</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.saveButton} onPress={() => onSave(trip, edit)}>
-            <Text style={styles.primaryButtonText}>ULOŽIT</Text>
-          </TouchableOpacity>
-        </View>
         {!trip.isEstimate && (
           <TouchableOpacity style={styles.discard} onPress={() => onDiscardRoute(trip)}>
             <Text style={styles.link}>Zahodit trasu (chybná) a použít odhad</Text>
           </TouchableOpacity>
         )}
-      </ScrollView>
+      </>
     </BottomSheetModal>
   );
 }
@@ -213,7 +221,8 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   secondaryWideText: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: fs(13), textAlign: 'center' },
-  buttons: { flexDirection: 'row', gap: 12, marginTop: 16 },
+  footerRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  cancelText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(15) },
   secondaryButton: { flex: 1, height: MIN_TOUCH, alignItems: 'center', justifyContent: 'center' },
   deleteText: { color: colors.danger, fontFamily: fonts.body, fontSize: fs(15) },
   saveButton: {

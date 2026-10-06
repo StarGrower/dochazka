@@ -6,7 +6,7 @@
 // theme.ts.
 
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import BottomSheetModal from './BottomSheetModal';
 import { KEYBOARD_ACCESSORY_ID } from './KeyboardDoneAccessory';
@@ -126,9 +126,17 @@ export default function StaySheet({ target, categories, settings, onClose, onSav
   };
 
   return (
-    <BottomSheetModal visible onClose={onClose} cardStyle={styles.sheet}>
-      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        <View style={styles.grab} />
+    <BottomSheetModal
+      visible
+      onClose={onClose}
+      cardStyle={styles.sheet}
+      footer={
+        <TouchableOpacity style={styles.bt} onPress={() => onSave(target, rows.filter((r) => r.quantity > 0), lock)}>
+          <Text style={styles.btText}>ULOŽIT</Text>
+        </TouchableOpacity>
+      }
+    >
+      <View style={styles.content}>
         <Text style={styles.title}>ZAPSAT POBYT</Text>
 
         <View style={styles.place}>
@@ -196,15 +204,12 @@ export default function StaySheet({ target, categories, settings, onClose, onSav
           </View>
         )}
 
-        <TouchableOpacity style={styles.bt} onPress={() => onSave(target, rows.filter((r) => r.quantity > 0), lock)}>
-          <Text style={styles.btText}>ULOŽIT</Text>
-        </TouchableOpacity>
         {!split && (
           <TouchableOpacity style={styles.bt2} onPress={() => setSplit(true)}>
             <Text style={styles.bt2Text}>Rozdělit na víc strojů</Text>
           </TouchableOpacity>
         )}
-      </ScrollView>
+      </View>
     </BottomSheetModal>
   );
 }
@@ -239,9 +244,8 @@ function ValueInput({ value, unitLabel, big, onChange }: { value: number; unitLa
 
 // Rozměry podle předlohy (.sh, .plc, .chip, .vb, .vv, .bt, .bt2).
 const styles = StyleSheet.create({
-  sheet: { borderTopLeftRadius: 18, borderTopRightRadius: 18, paddingTop: 10, paddingHorizontal: 16, paddingBottom: 26 },
+  sheet: { borderTopLeftRadius: 18, borderTopRightRadius: 18 },
   content: { gap: 14 },
-  grab: { width: 40, height: 5, borderRadius: 3, backgroundColor: '#4A4942', alignSelf: 'center' },
   title: { color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(24), letterSpacing: 0.7 },
   place: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.background, borderRadius: radii.card, paddingVertical: 10, paddingHorizontal: 12 },
   pin: { width: 26, height: 26, borderRadius: 4, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },

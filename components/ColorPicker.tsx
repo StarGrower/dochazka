@@ -99,7 +99,20 @@ export default function ColorPicker({ value, onChange, recentColors }: ColorPick
         <Text style={styles.customButtonText}>VLASTNÍ ODSTÍN</Text>
       </TouchableOpacity>
 
-      <BottomSheetModal visible={customOpen} onClose={() => setCustomOpen(false)}>
+      <BottomSheetModal
+        visible={customOpen}
+        onClose={() => setCustomOpen(false)}
+        footer={
+          <View style={styles.modalButtons}>
+            <TouchableOpacity style={styles.cancelButton} onPress={() => setCustomOpen(false)}>
+              <Text style={styles.cancelButtonText}>Zrušit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.useButton} onPress={confirmCustom}>
+              <Text style={styles.useButtonText}>POUŽÍT</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
         <Text style={styles.modalTitle}>VLASTNÍ ODSTÍN</Text>
 
         <ColorPickerLib
@@ -133,14 +146,6 @@ export default function ColorPicker({ value, onChange, recentColors }: ColorPick
         />
         {hexError && <Text style={styles.errorText}>Zadej platný hex kód, např. #F2B705.</Text>}
 
-        <View style={styles.modalButtons}>
-          <TouchableOpacity style={styles.cancelButton} onPress={() => setCustomOpen(false)}>
-            <Text style={styles.cancelButtonText}>Zrušit</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.useButton} onPress={confirmCustom}>
-            <Text style={styles.useButtonText}>POUŽÍT</Text>
-          </TouchableOpacity>
-        </View>
       </BottomSheetModal>
     </View>
   );

@@ -10,8 +10,8 @@
 // Sazba se ukládá k položce v okamžiku zápisu (viz lib/workCalc.ts ->
 // priceForRecord) - tenhle panel jen sbírá údaje a ukazuje výpočet.
 
-import { useEffect, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import BottomSheetModal from './BottomSheetModal';
 import { KEYBOARD_ACCESSORY_ID } from './KeyboardDoneAccessory';
@@ -263,9 +263,10 @@ export default function WorkItemSheet({
   );
 
   let content = null;
+  let footer: ReactNode = null; // pevná spodní lišta (BottomSheetModal)
   if (pickingPlace && mode) {
     content = (
-      <ScrollView keyboardShouldPersistTaps="handled">
+      <>
         <PlacePicker
           places={places}
           dayPlaceIds={dayPlaceIds}
@@ -281,13 +282,13 @@ export default function WorkItemSheet({
           }}
           onBack={() => setPickingPlace(false)}
         />
-      </ScrollView>
+      </>
     );
   } else if (mode?.kind === 'edit') {
     const record = mode.record;
     const locked = record.invoiceBatchId !== null;
     content = (
-      <ScrollView keyboardShouldPersistTaps="handled">
+      <>
         <Text style={styles.title}>UPRAVIT POLOŽKU</Text>
         {category ? renderQuantityStep(category) : <Text style={styles.empty}>Stroj nebo práce už neexistuje.</Text>}
         {record.surchargePct !== price.surchargePct && record.surchargePct > 0 && (
@@ -295,35 +296,39 @@ export default function WorkItemSheet({
         )}
         {locked && <Text style={styles.hint}>Vyfakturováno - sazba se nemění.</Text>}
         {renderAssignment(locked)}
-        <View style={styles.buttons}>
-          <TouchableOpacity style={styles.secondaryButton} onPress={onClose}>
-            <Text style={styles.secondaryButtonText}>Zavřít</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.primaryButton} onPress={() => onSave(record, unit, quantity, assignment())}>
-            <Text style={styles.primaryButtonText}>ULOŽIT</Text>
-          </TouchableOpacity>
-        </View>
-        <TouchableOpacity style={[styles.deleteButton, locked && styles.deleteButtonLocked]} onPress={() => onDelete(record)}>
-          <Text style={styles.deleteButtonText}>SMAZAT POLOŽKU</Text>
-        </TouchableOpacity>
         {locked && <Text style={styles.hint}>Vyfakturovanou položku nejde smazat.</Text>}
-      </ScrollView>
+      </>
+    );
+    footer = (
+      <View style={styles.footerRow}>
+        <TouchableOpacity style={[styles.deleteButton, locked && styles.deleteButtonLocked]} onPress={() => onDelete(record)}>
+          <Text style={styles.deleteButtonText}>SMAZAT</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.secondaryButton} onPress={onClose}>
+          <Text style={styles.secondaryButtonText}>Zrušit</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.primaryButton} onPress={() => onSave(record, unit, quantity, assignment())}>
+          <Text style={styles.primaryButtonText}>ULOŽIT</Text>
+        </TouchableOpacity>
+      </View>
     );
   } else if (mode?.kind === 'add' && category) {
     content = (
-      <ScrollView keyboardShouldPersistTaps="handled">
+      <>
         <Text style={styles.title}>PŘIDAT POLOŽKU</Text>
         {renderQuantityStep(category)}
         {renderAssignment(false)}
-        <View style={styles.buttons}>
-          <TouchableOpacity style={styles.secondaryButton} onPress={() => setCategory(null)}>
-            <Text style={styles.secondaryButtonText}>‹ Zpět</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.primaryButton} onPress={() => onAdd(category, unit, quantity, assignment())}>
-            <Text style={styles.primaryButtonText}>OK</Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
+      </>
+    );
+    footer = (
+      <View style={styles.footerRow}>
+        <TouchableOpacity style={styles.secondaryButton} onPress={() => setCategory(null)}>
+          <Text style={styles.secondaryButtonText}>‹ Zpět</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.primaryButton} onPress={() => onAdd(category, unit, quantity, assignment())}>
+          <Text style={styles.primaryButtonText}>ULOŽIT</Text>
+        </TouchableOpacity>
+      </View>
     );
   } else if (mode?.kind === 'add') {
     content = (
@@ -362,7 +367,7 @@ export default function WorkItemSheet({
   }
 
   return (
-    <BottomSheetModal visible={mode !== null} onClose={onClose}>
+    <BottomSheetModal visible={mode !== null} onClose={onClose} footer={footer}>
       {content}
     </BottomSheetModal>
   );
@@ -470,8 +475,9 @@ const styles = StyleSheet.create({
     borderColor: colors.danger,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 16,
+    paddingHorizontal: 14,
   },
+  footerRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
   deleteButtonLocked: { opacity: 0.4 },
   deleteButtonText: { color: colors.danger, fontFamily: fonts.headingBold, fontSize: fs(15), letterSpacing: 1 },
   closeButton: { height: MIN_TOUCH, alignItems: 'center', justifyContent: 'center', marginTop: 8 },

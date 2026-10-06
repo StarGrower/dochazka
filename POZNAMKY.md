@@ -238,8 +238,16 @@ opakovaně bez chyb, uuid u všech řádků, trigger u nového řádku.
   místa u jediného pracovního místa dne ("místo podle pobytu", jen
   zobrazení), jinak "Podle mých pobytů". Tlačítko SMAZAT POLOŽKU (potvrzení;
   vyfakturovaná nejde).
-- **Okna:** `BottomSheetModal` vždy posouvatelný (výška z okna bez horní
-  bezpečné oblasti a klávesnice, ScrollView) - týká se všech 23 oken.
+- **Okna (`BottomSheetModal`):** výška z okna bez horní bezpečné oblasti a
+  klávesnice; JEDNA ScrollView (vnořené svislé ScrollView v oknech
+  odstraněny - přetahovaly se o tah); tmavý podklad je sourozenec karty
+  (dřív TouchableWithoutFeedback kolem obsahu chytal první dotyk -> posun
+  až na několikátý pokus); `footer` = pevná spodní lišta (ULOŽIT / ZRUŠIT
+  / SMAZAT) nad bezpečnou oblastí i klávesnicí; zavření tahem dolů jen za
+  úchyt nahoře. Lišta: položka, přejezd, zápis pobytu, úprava pobytu,
+  kategorie, vlastní barva, pracovník, kniha jízd (jízda, nezaznamenáno,
+  export), stroj (stav, servisní položka, záznam, závada), zakázka
+  (podklad, výdaj), K proplacení, záloha (klíč, obnova, náhled).
 - **Mapa na celou obrazovku:** iOS pageSheet (zavření tahem dolů za pruh
   nahoře), ZAVŘÍT 44×44+ s tmavým podkladem. Příčina: SafeAreaView uvnitř
   Modal má nulové okraje.

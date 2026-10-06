@@ -338,7 +338,20 @@ export default function OrderDetailScreen() {
         )}
       </TouchableOpacity>
 
-      <BottomSheetModal visible={invoiceOpen} onClose={() => setInvoiceOpen(false)}>
+      <BottomSheetModal
+        visible={invoiceOpen}
+        onClose={() => setInvoiceOpen(false)}
+        footer={
+          <View style={styles.footerRow}>
+            <TouchableOpacity style={styles.footerCancel} onPress={() => setInvoiceOpen(false)}>
+              <Text style={styles.footerCancelText}>Zrušit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.footerCta} onPress={confirmInvoice}>
+              <Text style={styles.ctaText}>OZNAČIT VYFAKTUROVÁNO</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
         <Text style={styles.modalTitle}>PODKLAD K FAKTUŘE</Text>
         <Text style={styles.hint}>
           {workerName
@@ -354,12 +367,22 @@ export default function OrderDetailScreen() {
           placeholderTextColor={colors.textMuted}
           inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
         />
-        <TouchableOpacity style={styles.modalCta} onPress={confirmInvoice}>
-          <Text style={styles.ctaText}>OZNAČIT VYFAKTUROVÁNO</Text>
-        </TouchableOpacity>
       </BottomSheetModal>
 
-      <BottomSheetModal visible={expenseOpen} onClose={() => setExpenseOpen(false)}>
+      <BottomSheetModal
+        visible={expenseOpen}
+        onClose={() => setExpenseOpen(false)}
+        footer={
+          <View style={styles.footerRow}>
+            <TouchableOpacity style={styles.footerCancel} onPress={() => setExpenseOpen(false)}>
+              <Text style={styles.footerCancelText}>Zrušit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.footerCta} onPress={saveExpense}>
+              <Text style={styles.ctaText}>ULOŽIT VÝDAJ</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
         <Text style={styles.modalTitle}>VÝDAJ K ZAKÁZCE</Text>
         <View style={styles.chips}>
           {(Object.keys(EXPENSE_LABEL) as ExpenseCategory[]).map((c) => (
@@ -385,9 +408,6 @@ export default function OrderDetailScreen() {
           placeholderTextColor={colors.textMuted}
           inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
         />
-        <TouchableOpacity style={styles.modalCta} onPress={saveExpense}>
-          <Text style={styles.ctaText}>ULOŽIT VÝDAJ</Text>
-        </TouchableOpacity>
       </BottomSheetModal>
 
       <BottomSheetModal visible={exportOpen} onClose={() => setExportOpen(false)}>
@@ -411,6 +431,10 @@ export default function OrderDetailScreen() {
 
 // Rozměry podle předlohy (.top, .hero/.hv/.hl, .tb/.row/.rv, .cta).
 const styles = StyleSheet.create({
+  footerRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  footerCta: { flex: 1, height: 52, borderRadius: radii.card, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  footerCancel: { height: 52, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
+  footerCancelText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(15) },
   container: { flex: 1, backgroundColor: colors.background },
   loading: { marginTop: 40 },
   top: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 22, paddingHorizontal: 16, paddingBottom: 12 },

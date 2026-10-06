@@ -75,7 +75,11 @@ export default function MachineScreen() {
   const [recordFor, setRecordFor] = useState<ServiceItem | 'free' | null>(null);
   const [record, setRecord] = useState({ counter: '', workDone: '', material: '', doneBy: '', note: '' });
   const [defectOpen, setDefectOpen] = useState(false);
-  const [defect, setDefect] = useState<{ description: string; severity: DefectSeverity; photo: { id: number; base64: string } | null }>({ description: '', severity: 'ok', photo: null });
+  const [defect, setDefect] = useState<{ description: string; severity: DefectSeverity; photo: { id: number; base64: string } | null }>({
+    description: '',
+    severity: 'ok',
+    photo: null,
+  });
   const [showResolved, setShowResolved] = useState(false);
 
   const load = useCallback(async () => {
@@ -146,7 +150,14 @@ export default function MachineScreen() {
   const openItem = (item: ServiceItem | null) =>
     setItemDraft(
       item
-        ? { id: item.id, name: item.name, value: item.intervalValue ? String(item.intervalValue) : '', days: item.intervalDays ? String(item.intervalDays) : '', warn1: item.warnFirst !== null ? String(item.warnFirst) : '', warn2: item.warnSecond !== null ? String(item.warnSecond) : '' }
+        ? {
+            id: item.id,
+            name: item.name,
+            value: item.intervalValue ? String(item.intervalValue) : '',
+            days: item.intervalDays ? String(item.intervalDays) : '',
+            warn1: item.warnFirst !== null ? String(item.warnFirst) : '',
+            warn2: item.warnSecond !== null ? String(item.warnSecond) : '',
+          }
         : { id: null, name: '', value: '', days: '', warn1: machine.counterUnit === 'km' ? '1000' : '50', warn2: machine.counterUnit === 'km' ? '400' : '20' }
     );
 
@@ -241,7 +252,14 @@ export default function MachineScreen() {
                 : 'Zadej stav počitadla (kotevní bod) - pak appka odhaduje sama ze zápisů.'}
             </Text>
             <View style={styles.row2}>
-              <TouchableOpacity style={styles.btn} onPress={() => { setReadingPhoto(null); setReadingValue(''); setReadingOpen(true); }}>
+              <TouchableOpacity
+                style={styles.btn}
+                onPress={() => {
+                  setReadingPhoto(null);
+                  setReadingValue('');
+                  setReadingOpen(true);
+                }}
+              >
                 <Text style={styles.btnText}>Zadat stav</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.btn} onPress={photoCounter} disabled={busy}>
@@ -276,7 +294,14 @@ export default function MachineScreen() {
                   { text: 'Zrušit', style: 'cancel' },
                   { text: 'Provedeno (záznam)', onPress: () => openRecord(item) },
                   { text: 'Upravit položku', onPress: () => openItem(item) },
-                  { text: 'Smazat položku', style: 'destructive', onPress: async () => { await deleteServiceItem(item.id); await load(); } },
+                  {
+                    text: 'Smazat položku',
+                    style: 'destructive',
+                    onPress: async () => {
+                      await deleteServiceItem(item.id);
+                      await load();
+                    },
+                  },
                 ])
               }
             >
@@ -285,7 +310,9 @@ export default function MachineScreen() {
                 <View style={styles.flex}>
                   <Text style={styles.rowText}>{item.name}</Text>
                   <Text style={styles.rq}>
-                    {[item.intervalValue ? `à ${formatNumberCs(item.intervalValue)} ${unit}` : null, item.intervalDays ? `à ${item.intervalDays} dní` : null].filter(Boolean).join(' / ')}
+                    {[item.intervalValue ? `à ${formatNumberCs(item.intervalValue)} ${unit}` : null, item.intervalDays ? `à ${item.intervalDays} dní` : null]
+                      .filter(Boolean)
+                      .join(' / ')}
                   </Text>
                 </View>
               </View>
@@ -308,7 +335,10 @@ export default function MachineScreen() {
             <TouchableOpacity onPress={() => openRecord('free')} hitSlop={8}>
               <Text style={styles.link}>+ Záznam</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => run(() => sharePdfFromHtml(serviceBookHtml(machine, est?.value ?? null, plan, records), `Servisni-kniha-${machine.name}`, 'Servisní kniha'))} hitSlop={8}>
+            <TouchableOpacity
+              onPress={() => run(() => sharePdfFromHtml(serviceBookHtml(machine, est?.value ?? null, plan, records), `Servisni-kniha-${machine.name}`, 'Servisní kniha'))}
+              hitSlop={8}
+            >
               <Text style={styles.link}>PDF</Text>
             </TouchableOpacity>
           </View>
@@ -348,8 +378,10 @@ export default function MachineScreen() {
               style={[styles.row, i === 0 && styles.rowFirst]}
               disabled={!!d.resolvedAt}
               onPress={() =>
-                Alert.prompt?.('Vyřešeno', 'Poznámka k opravě (volitelné)', async (note) => { await resolveDefect(d.id, note ?? ''); await load(); }) ??
-                resolveDefect(d.id, '').then(load)
+                Alert.prompt?.('Vyřešeno', 'Poznámka k opravě (volitelné)', async (note) => {
+                  await resolveDefect(d.id, note ?? '');
+                  await load();
+                }) ?? resolveDefect(d.id, '').then(load)
               }
             >
               <View style={styles.flex}>
@@ -391,14 +423,20 @@ export default function MachineScreen() {
               {consumption.slice(-12).map((c) => (
                 <View key={c.toMs} style={styles.chartCol}>
                   <View style={[styles.chartBar, { height: Math.max(4, (c.perUnit / maxSeg) * 70) }, c.jump && styles.chartJump]} />
-                  <Text style={styles.chartLabel}>{new Date(c.toMs).getDate()}.{new Date(c.toMs).getMonth() + 1}.</Text>
+                  <Text style={styles.chartLabel}>
+                    {new Date(c.toMs).getDate()}.{new Date(c.toMs).getMonth() + 1}.
+                  </Text>
                 </View>
               ))}
             </View>
           )}
           {consumption.some((c) => c.jump) && (
             <Text style={styles.jumpText}>
-              Skok spotřeby (+20 % proti průměru): {consumption.filter((c) => c.jump).map((c) => `${cz(toIsoDate(new Date(c.toMs)))} ${consumptionLabel(c.perUnit)}`).join(', ')}
+              Skok spotřeby (+20 % proti průměru):{' '}
+              {consumption
+                .filter((c) => c.jump)
+                .map((c) => `${cz(toIsoDate(new Date(c.toMs)))} ${consumptionLabel(c.perUnit)}`)
+                .join(', ')}
             </Text>
           )}
           {fuel.slice(0, 8).map((e) => (
@@ -430,61 +468,192 @@ export default function MachineScreen() {
         )}
       </ScrollView>
 
-      <BottomSheetModal visible={readingOpen} onClose={() => setReadingOpen(false)}>
+      <BottomSheetModal
+        visible={readingOpen}
+        onClose={() => setReadingOpen(false)}
+        footer={
+          <View style={styles.footerRow}>
+            <TouchableOpacity style={styles.footerCancel} onPress={() => setReadingOpen(false)}>
+              <Text style={styles.footerCancelText}>Zrušit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.footerCta} onPress={saveReading}>
+              <Text style={styles.ctaText}>ULOŽIT STAV</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
         <Text style={styles.modalTitle}>STAV POČITADLA</Text>
         {readingPhoto && <Image source={{ uri: `data:image/jpeg;base64,${readingPhoto.base64}` }} style={styles.photo} resizeMode="contain" />}
         <Text style={styles.hint}>{readingPhoto ? 'Rozpoznaný stav - zkontroluj a případně oprav.' : 'Stav z displeje stroje / tachometru.'}</Text>
-        <TextInput style={styles.input} value={readingValue} onChangeText={setReadingValue} placeholder={`Stav (${unit})`} placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" inputAccessoryViewID={KEYBOARD_ACCESSORY_ID} />
-        <TouchableOpacity style={styles.cta} onPress={saveReading}>
-          <Text style={styles.ctaText}>ULOŽIT STAV</Text>
-        </TouchableOpacity>
+        <TextInput
+          style={styles.input}
+          value={readingValue}
+          onChangeText={setReadingValue}
+          placeholder={`Stav (${unit})`}
+          placeholderTextColor={colors.textMuted}
+          keyboardType="decimal-pad"
+          inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+        />
       </BottomSheetModal>
 
-      <BottomSheetModal visible={itemDraft !== null} onClose={() => setItemDraft(null)}>
+      <BottomSheetModal
+        visible={itemDraft !== null}
+        onClose={() => setItemDraft(null)}
+        footer={
+          <View style={styles.footerRow}>
+            <TouchableOpacity style={styles.footerCancel} onPress={() => setItemDraft(null)}>
+              <Text style={styles.footerCancelText}>Zrušit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.footerCta} onPress={saveItem}>
+              <Text style={styles.ctaText}>ULOŽIT</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
         <Text style={styles.modalTitle}>SERVISNÍ POLOŽKA</Text>
         {itemDraft && (
           <>
-            <TextInput style={styles.input} value={itemDraft.name} onChangeText={(t) => setItemDraft((d) => (d ? { ...d, name: t } : d))} placeholder="Název (např. Motorový olej)" placeholderTextColor={colors.textMuted} inputAccessoryViewID={KEYBOARD_ACCESSORY_ID} />
+            <TextInput
+              style={styles.input}
+              value={itemDraft.name}
+              onChangeText={(t) => setItemDraft((d) => (d ? { ...d, name: t } : d))}
+              placeholder="Název (např. Motorový olej)"
+              placeholderTextColor={colors.textMuted}
+              inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+            />
             {machine.counterUnit !== 'none' && (
-              <TextInput style={styles.input} value={itemDraft.value} onChangeText={(t) => setItemDraft((d) => (d ? { ...d, value: t } : d))} placeholder={`Interval v ${unit} (prázdné = jen čas)`} placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" inputAccessoryViewID={KEYBOARD_ACCESSORY_ID} />
+              <TextInput
+                style={styles.input}
+                value={itemDraft.value}
+                onChangeText={(t) => setItemDraft((d) => (d ? { ...d, value: t } : d))}
+                placeholder={`Interval v ${unit} (prázdné = jen čas)`}
+                placeholderTextColor={colors.textMuted}
+                keyboardType="decimal-pad"
+                inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+              />
             )}
-            <TextInput style={styles.input} value={itemDraft.days} onChangeText={(t) => setItemDraft((d) => (d ? { ...d, days: t } : d))} placeholder="Interval ve dnech (prázdné = jen počitadlo)" placeholderTextColor={colors.textMuted} keyboardType="number-pad" inputAccessoryViewID={KEYBOARD_ACCESSORY_ID} />
+            <TextInput
+              style={styles.input}
+              value={itemDraft.days}
+              onChangeText={(t) => setItemDraft((d) => (d ? { ...d, days: t } : d))}
+              placeholder="Interval ve dnech (prázdné = jen počitadlo)"
+              placeholderTextColor={colors.textMuted}
+              keyboardType="number-pad"
+              inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+            />
             {machine.counterUnit !== 'none' && (
               <View style={styles.row2}>
-                <TextInput style={[styles.input, styles.flex]} value={itemDraft.warn1} onChangeText={(t) => setItemDraft((d) => (d ? { ...d, warn1: t } : d))} placeholder={`1. upozornění ${unit} předem`} placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" inputAccessoryViewID={KEYBOARD_ACCESSORY_ID} />
-                <TextInput style={[styles.input, styles.flex]} value={itemDraft.warn2} onChangeText={(t) => setItemDraft((d) => (d ? { ...d, warn2: t } : d))} placeholder={`2. upozornění ${unit} předem`} placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" inputAccessoryViewID={KEYBOARD_ACCESSORY_ID} />
+                <TextInput
+                  style={[styles.input, styles.flex]}
+                  value={itemDraft.warn1}
+                  onChangeText={(t) => setItemDraft((d) => (d ? { ...d, warn1: t } : d))}
+                  placeholder={`1. upozornění ${unit} předem`}
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType="decimal-pad"
+                  inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+                />
+                <TextInput
+                  style={[styles.input, styles.flex]}
+                  value={itemDraft.warn2}
+                  onChangeText={(t) => setItemDraft((d) => (d ? { ...d, warn2: t } : d))}
+                  placeholder={`2. upozornění ${unit} předem`}
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType="decimal-pad"
+                  inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+                />
               </View>
             )}
             <Text style={styles.hint}>Upozornění u data: 30 a 7 dní předem. Platí co nastane dřív.</Text>
-            <TouchableOpacity style={styles.cta} onPress={saveItem}>
-              <Text style={styles.ctaText}>ULOŽIT</Text>
-            </TouchableOpacity>
           </>
         )}
       </BottomSheetModal>
 
-      <BottomSheetModal visible={recordFor !== null} onClose={() => setRecordFor(null)}>
-        <ScrollView keyboardShouldPersistTaps="handled">
+      <BottomSheetModal
+        visible={recordFor !== null}
+        onClose={() => setRecordFor(null)}
+        footer={
+          <View style={styles.footerRow}>
+            <TouchableOpacity style={styles.footerCancel} onPress={() => setRecordFor(null)}>
+              <Text style={styles.footerCancelText}>Zrušit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.footerCta} onPress={saveRecord}>
+              <Text style={styles.ctaText}>ULOŽIT ZÁZNAM</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
+        <>
           <Text style={styles.modalTitle}>SERVISNÍ ZÁZNAM</Text>
           <Text style={styles.hint}>Uložením se interval položky vynuluje. Ceny se nezapisují.</Text>
           {machine.counterUnit !== 'none' && (
-            <TextInput style={styles.input} value={record.counter} onChangeText={(t) => setRecord((r) => ({ ...r, counter: t }))} placeholder={`Stav ${unit}`} placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" inputAccessoryViewID={KEYBOARD_ACCESSORY_ID} />
+            <TextInput
+              style={styles.input}
+              value={record.counter}
+              onChangeText={(t) => setRecord((r) => ({ ...r, counter: t }))}
+              placeholder={`Stav ${unit}`}
+              placeholderTextColor={colors.textMuted}
+              keyboardType="decimal-pad"
+              inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+            />
           )}
-          <TextInput style={styles.input} value={record.workDone} onChangeText={(t) => setRecord((r) => ({ ...r, workDone: t }))} placeholder="Co se dělalo" placeholderTextColor={colors.textMuted} inputAccessoryViewID={KEYBOARD_ACCESSORY_ID} />
-          <TextInput style={styles.input} value={record.material} onChangeText={(t) => setRecord((r) => ({ ...r, material: t }))} placeholder="Materiál (olej 15W-40 12 l, filtr...)" placeholderTextColor={colors.textMuted} inputAccessoryViewID={KEYBOARD_ACCESSORY_ID} />
-          <TextInput style={styles.input} value={record.doneBy} onChangeText={(t) => setRecord((r) => ({ ...r, doneBy: t }))} placeholder="Kdo (já, servis XY)" placeholderTextColor={colors.textMuted} inputAccessoryViewID={KEYBOARD_ACCESSORY_ID} />
-          <TouchableOpacity style={styles.cta} onPress={saveRecord}>
-            <Text style={styles.ctaText}>ULOŽIT ZÁZNAM</Text>
-          </TouchableOpacity>
-        </ScrollView>
+          <TextInput
+            style={styles.input}
+            value={record.workDone}
+            onChangeText={(t) => setRecord((r) => ({ ...r, workDone: t }))}
+            placeholder="Co se dělalo"
+            placeholderTextColor={colors.textMuted}
+            inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+          />
+          <TextInput
+            style={styles.input}
+            value={record.material}
+            onChangeText={(t) => setRecord((r) => ({ ...r, material: t }))}
+            placeholder="Materiál (olej 15W-40 12 l, filtr...)"
+            placeholderTextColor={colors.textMuted}
+            inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+          />
+          <TextInput
+            style={styles.input}
+            value={record.doneBy}
+            onChangeText={(t) => setRecord((r) => ({ ...r, doneBy: t }))}
+            placeholder="Kdo (já, servis XY)"
+            placeholderTextColor={colors.textMuted}
+            inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+          />
+        </>
       </BottomSheetModal>
 
-      <BottomSheetModal visible={defectOpen} onClose={() => setDefectOpen(false)}>
+      <BottomSheetModal
+        visible={defectOpen}
+        onClose={() => setDefectOpen(false)}
+        footer={
+          <View style={styles.footerRow}>
+            <TouchableOpacity style={styles.footerCancel} onPress={() => setDefectOpen(false)}>
+              <Text style={styles.footerCancelText}>Zrušit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.footerCta} onPress={saveDefect}>
+              <Text style={styles.ctaText}>ULOŽIT ZÁVADU</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
         <Text style={styles.modalTitle}>NAHLÁSIT ZÁVADU</Text>
-        <TextInput style={[styles.input, styles.multiline]} value={defect.description} onChangeText={(t) => setDefect((d) => ({ ...d, description: t }))} placeholder="Popis závady" placeholderTextColor={colors.textMuted} multiline inputAccessoryViewID={KEYBOARD_ACCESSORY_ID} />
+        <TextInput
+          style={[styles.input, styles.multiline]}
+          value={defect.description}
+          onChangeText={(t) => setDefect((d) => ({ ...d, description: t }))}
+          placeholder="Popis závady"
+          placeholderTextColor={colors.textMuted}
+          multiline
+          inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+        />
         <View style={styles.chips}>
           {(Object.keys(DEFECT_LABEL) as DefectSeverity[]).map((sv) => (
-            <TouchableOpacity key={sv} style={[styles.chip, defect.severity === sv && (sv === 'stopped' ? styles.chipDanger : styles.chipOn)]} onPress={() => setDefect((d) => ({ ...d, severity: sv }))}>
+            <TouchableOpacity
+              key={sv}
+              style={[styles.chip, defect.severity === sv && (sv === 'stopped' ? styles.chipDanger : styles.chipOn)]}
+              onPress={() => setDefect((d) => ({ ...d, severity: sv }))}
+            >
               <Text style={[styles.chipText, defect.severity === sv && styles.chipTextOn]}>{DEFECT_LABEL[sv]}</Text>
             </TouchableOpacity>
           ))}
@@ -492,13 +661,18 @@ export default function MachineScreen() {
         {defect.photo ? (
           <Image source={{ uri: `data:image/jpeg;base64,${defect.photo.base64}` }} style={styles.photo} resizeMode="contain" />
         ) : (
-          <TouchableOpacity style={styles.btn} onPress={() => run(async () => { const p = await takePhoto('camera', false); if (p) setDefect((d) => ({ ...d, photo: p })); })}>
+          <TouchableOpacity
+            style={styles.btn}
+            onPress={() =>
+              run(async () => {
+                const p = await takePhoto('camera', false);
+                if (p) setDefect((d) => ({ ...d, photo: p }));
+              })
+            }
+          >
             <Text style={styles.btnText}>Vyfotit závadu</Text>
           </TouchableOpacity>
         )}
-        <TouchableOpacity style={styles.cta} onPress={saveDefect}>
-          <Text style={styles.ctaText}>ULOŽIT ZÁVADU</Text>
-        </TouchableOpacity>
       </BottomSheetModal>
     </SafeAreaView>
   );
@@ -520,7 +694,17 @@ const styles = StyleSheet.create({
   hv: { color: colors.accent, fontFamily: 'BarlowCondensed_800ExtraBold', fontSize: fs(40), lineHeight: fs(42) },
   small: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12) },
   row2: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  btn: { flex: 1, minHeight: MIN_TOUCH, borderRadius: radii.card, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10, marginTop: 6 },
+  btn: {
+    flex: 1,
+    minHeight: MIN_TOUCH,
+    borderRadius: radii.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    marginTop: 6,
+  },
   btnText: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(14) },
   alert: { borderRadius: radii.card, padding: 12, backgroundColor: colors.accent },
   alertDanger: { backgroundColor: colors.danger },
@@ -548,7 +732,18 @@ const styles = StyleSheet.create({
   jumpText: { color: colors.danger, fontFamily: fonts.bodySemiBold, fontSize: fs(12), paddingVertical: 6 },
   modalTitle: { color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(16), letterSpacing: 1, marginBottom: 8 },
   hint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginBottom: 4 },
-  input: { borderWidth: 1, borderColor: colors.border, borderRadius: radii.card, paddingHorizontal: 12, minHeight: 48, color: colors.text, fontFamily: fonts.body, fontSize: fs(16), backgroundColor: colors.background, marginTop: 8 },
+  input: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.card,
+    paddingHorizontal: 12,
+    minHeight: 48,
+    color: colors.text,
+    fontFamily: fonts.body,
+    fontSize: fs(16),
+    backgroundColor: colors.background,
+    marginTop: 8,
+  },
   multiline: { minHeight: 72, textAlignVertical: 'top', paddingTop: 10 },
   photo: { width: '100%', height: 180, borderRadius: radii.card, marginVertical: 8, backgroundColor: colors.background },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
@@ -557,6 +752,10 @@ const styles = StyleSheet.create({
   chipDanger: { backgroundColor: colors.danger, borderColor: colors.danger },
   chipText: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(14) },
   chipTextOn: { color: colors.onAccent },
+  footerRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  footerCta: { flex: 1, height: 52, borderRadius: radii.card, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  footerCancel: { height: 52, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
+  footerCancelText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(15) },
   cta: { height: 52, borderRadius: radii.card, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', marginTop: 12 },
   ctaText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(18), letterSpacing: 0.9 },
 });

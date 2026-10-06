@@ -501,9 +501,22 @@ export default function LogbookScreen() {
         />
       )}
 
-      <BottomSheetModal visible={editing !== null} onClose={() => setEditing(null)}>
+      <BottomSheetModal
+        visible={editing !== null}
+        onClose={() => setEditing(null)}
+        footer={
+          <View style={styles.footerRow}>
+            <TouchableOpacity style={styles.footerSecondary} onPress={() => setEditing(null)}>
+              <Text style={styles.footerSecondaryText}>Zrušit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.footerCta, styles.flex]} onPress={saveTrip}>
+              <Text style={styles.ctaText}>ULOŽIT</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
         {editing && (
-          <ScrollView keyboardShouldPersistTaps="handled">
+          <>
             <Text style={styles.modalTitle}>JÍZDA</Text>
             <Text style={styles.modalSub}>
               {dayLabel(editing.startAt)} {hm(editing.startAt)}–{hm(editing.endAt)} · {editing.fromLabel} → {editing.toLabel}
@@ -537,9 +550,6 @@ export default function LogbookScreen() {
               {people.map((p) => chip(p.name, draft.driverId === p.id, () => setDraft((d) => ({ ...d, driverId: p.id })), `ed${p.id}`))}
               {chip('+ Řidič', false, () => newDriver((id) => setDraft((d) => ({ ...d, driverId: id }))))}
             </View>
-            <TouchableOpacity style={styles.cta} onPress={saveTrip}>
-              <Text style={styles.ctaText}>ULOŽIT</Text>
-            </TouchableOpacity>
             <TouchableOpacity
               style={styles.linkBtn}
               onPress={() => {
@@ -550,11 +560,32 @@ export default function LogbookScreen() {
             >
               <Text style={styles.link}>Otevřít den (km, trasa, smazání)</Text>
             </TouchableOpacity>
-          </ScrollView>
+          </>
         )}
       </BottomSheetModal>
 
-      <BottomSheetModal visible={gapEditing !== null} onClose={() => setGapEditing(null)}>
+      <BottomSheetModal
+        visible={gapEditing !== null}
+        onClose={() => setGapEditing(null)}
+        footer={
+          <View style={styles.footerRow}>
+            <TouchableOpacity style={styles.footerSecondary} onPress={() => setGapEditing(null)}>
+              <Text style={styles.footerSecondaryText}>Zrušit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.footerCta, styles.flex]}
+              onPress={async () => {
+                if (!gapEditing) return;
+                await assignGap(gapEditing.id, gapDraft.driverId, gapDraft.note.trim());
+                setGapEditing(null);
+                await load();
+              }}
+            >
+              <Text style={styles.ctaText}>ULOŽIT</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
         {gapEditing && (
           <>
             <Text style={styles.modalTitle}>JINÝ ŘIDIČ / NEZAZNAMENÁNO</Text>
@@ -576,21 +607,24 @@ export default function LogbookScreen() {
               placeholderTextColor={colors.textMuted}
               inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
             />
-            <TouchableOpacity
-              style={styles.cta}
-              onPress={async () => {
-                await assignGap(gapEditing.id, gapDraft.driverId, gapDraft.note.trim());
-                setGapEditing(null);
-                await load();
-              }}
-            >
-              <Text style={styles.ctaText}>ULOŽIT</Text>
-            </TouchableOpacity>
           </>
         )}
       </BottomSheetModal>
 
-      <BottomSheetModal visible={exportOpen} onClose={() => setExportOpen(false)}>
+      <BottomSheetModal
+        visible={exportOpen}
+        onClose={() => setExportOpen(false)}
+        footer={
+          <View style={styles.footerRow}>
+            <TouchableOpacity style={[styles.footerCta, styles.flex]} onPress={() => doExport('pdf')} disabled={busy}>
+              <Text style={styles.ctaText}>PDF</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.footerCta, styles.flex]} onPress={() => doExport('xlsx')} disabled={busy}>
+              <Text style={styles.ctaText}>EXCEL</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
         <Text style={styles.modalTitle}>EXPORT KNIHY JÍZD</Text>
         <Text style={styles.hint}>
           {periodLabel} · {vehicleFilter !== null ? vehicleName(vehicleFilter) : 'všechna vozidla'} · {filtered.length} jízd (podle filtrů)
@@ -614,14 +648,7 @@ export default function LogbookScreen() {
           placeholderTextColor={colors.textMuted}
           inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
         />
-        <View style={styles.actions}>
-          <TouchableOpacity style={[styles.cta, styles.flex]} onPress={() => doExport('pdf')} disabled={busy}>
-            <Text style={styles.ctaText}>PDF</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.cta, styles.flex]} onPress={() => doExport('xlsx')} disabled={busy}>
-            <Text style={styles.ctaText}>EXCEL</Text>
-          </TouchableOpacity>
-        </View>
+
       </BottomSheetModal>
     </SafeAreaView>
   );
@@ -675,6 +702,10 @@ const styles = StyleSheet.create({
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: radii.card, paddingHorizontal: 12, minHeight: 48, color: colors.text, fontFamily: fonts.body, fontSize: fs(16), backgroundColor: colors.background, marginTop: 6 },
   cta: { height: 52, borderRadius: radii.card, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', marginTop: 14 },
   ctaText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(18), letterSpacing: 0.9 },
+  footerRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  footerCta: { height: 52, borderRadius: radii.card, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  footerSecondary: { height: 52, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
+  footerSecondaryText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(15) },
   linkBtn: { alignItems: 'center', marginTop: 12, minHeight: MIN_TOUCH, justifyContent: 'center' },
   link: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: fs(13) },
 });

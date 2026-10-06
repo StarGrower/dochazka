@@ -961,7 +961,20 @@ export default function DayDetailScreen() {
         }
       />
 
-      <BottomSheetModal visible={visitEditTarget !== null} onClose={() => setVisitEditTarget(null)}>
+      <BottomSheetModal
+        visible={visitEditTarget !== null}
+        onClose={() => setVisitEditTarget(null)}
+        footer={
+          <View style={styles.modalButtons}>
+            <TouchableOpacity style={styles.cancelButton} onPress={handleDeleteVisit}>
+              <Text style={styles.deleteVisitText}>Smazat pobyt</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.saveButton} onPress={commitVisitTimes}>
+              <Text style={styles.saveButtonText}>ULOŽIT</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
         <Text style={styles.modalTitle}>UPRAVIT POBYT</Text>
         {visitEditTarget && (
           <>
@@ -993,14 +1006,6 @@ export default function DayDetailScreen() {
                 keyboardType="numbers-and-punctuation"
                 inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
               />
-            </View>
-            <View style={styles.modalButtons}>
-              <TouchableOpacity style={styles.cancelButton} onPress={handleDeleteVisit}>
-                <Text style={styles.deleteVisitText}>Smazat pobyt</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.saveButton} onPress={commitVisitTimes}>
-                <Text style={styles.saveButtonText}>ULOŽIT</Text>
-              </TouchableOpacity>
             </View>
           </>
         )}

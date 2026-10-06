@@ -219,8 +219,24 @@ export default function ZalohaScreen() {
       </ScrollView>
 
       {/* Obnovovací klíč - jednou při nastavení, pak kdykoliv na požádání. */}
-      <BottomSheetModal visible={recoveryKey !== null} onClose={() => setRecoveryKey(null)}>
-        <ScrollView>
+      <BottomSheetModal
+        visible={recoveryKey !== null}
+        onClose={() => setRecoveryKey(null)}
+        footer={
+          <View style={styles.footerRow}>
+            <TouchableOpacity
+              style={styles.footerCta}
+              onPress={async () => {
+                await markRecoveryKeyShown();
+                setRecoveryKey(null);
+              }}
+            >
+              <Text style={styles.primaryText}>MÁM ULOŽENO</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
+        <>
           <Text style={styles.modalTitle}>OBNOVOVACÍ KLÍČ</Text>
           <Text style={styles.hint}>
             Ulož si ho (Hesla, poznámka, tisk). Je potřeba jen při obnově na novém telefonu, když klíč nepřejde přes iCloud
@@ -252,20 +268,24 @@ export default function ZalohaScreen() {
               <Text style={styles.secondaryText}>Tisk</Text>
             </TouchableOpacity>
           </View>
-          <TouchableOpacity
-            style={styles.primary}
-            onPress={async () => {
-              await markRecoveryKeyShown();
-              setRecoveryKey(null);
-            }}
-          >
-            <Text style={styles.primaryText}>MÁM ULOŽENO</Text>
-          </TouchableOpacity>
-        </ScrollView>
+        </>
       </BottomSheetModal>
 
       {/* Klíč chybí -> zadat obnovovací klíč. */}
-      <BottomSheetModal visible={keyPrompt !== null} onClose={() => setKeyPrompt(null)}>
+      <BottomSheetModal
+        visible={keyPrompt !== null}
+        onClose={() => setKeyPrompt(null)}
+        footer={
+          <View style={styles.footerRow}>
+            <TouchableOpacity style={styles.footerCancel} onPress={() => setKeyPrompt(null)}>
+              <Text style={styles.footerCancelText}>Zrušit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.footerCta} onPress={() => keyPrompt && startRestore(keyPrompt.source, keyDraft)}>
+              <Text style={styles.primaryText}>POKRAČOVAT</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
         <Text style={styles.modalTitle}>ZADEJ OBNOVOVACÍ KLÍČ</Text>
         <Text style={styles.hint}>V tomhle telefonu šifrovací klíč není (nepřešel přes iCloud Klíčenku). Opiš nebo vlož obnovovací klíč.</Text>
         <TextInput
@@ -279,13 +299,23 @@ export default function ZalohaScreen() {
           multiline
           inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
         />
-        <TouchableOpacity style={styles.primary} onPress={() => keyPrompt && startRestore(keyPrompt.source, keyDraft)}>
-          <Text style={styles.primaryText}>POKRAČOVAT</Text>
-        </TouchableOpacity>
       </BottomSheetModal>
 
       {/* Náhled obnovy. */}
-      <BottomSheetModal visible={preview !== null} onClose={() => setPreview(null)}>
+      <BottomSheetModal
+        visible={preview !== null}
+        onClose={() => setPreview(null)}
+        footer={
+          <View style={styles.footerRow}>
+            <TouchableOpacity style={styles.footerCancel} onPress={() => setPreview(null)}>
+              <Text style={styles.footerCancelText}>Zrušit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.footerCta, styles.danger]} onPress={confirmRestore}>
+              <Text style={styles.primaryText}>NAHRADIT DATA ZÁLOHOU</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
         <Text style={styles.modalTitle}>OBNOVIT ZE ZÁLOHY</Text>
         {preview && (
           <>
@@ -297,9 +327,6 @@ export default function ZalohaScreen() {
             <Text style={styles.previewLine}>Položek práce: {preview.recordCount}</Text>
             <Text style={styles.previewLine}>Uložených míst: {preview.placeCount}</Text>
             <Text style={styles.previewLine}>Pobytů: {preview.visitCount}</Text>
-            <TouchableOpacity style={[styles.primary, styles.danger]} onPress={confirmRestore}>
-              <Text style={styles.primaryText}>NAHRADIT DATA ZÁLOHOU</Text>
-            </TouchableOpacity>
           </>
         )}
       </BottomSheetModal>
@@ -308,6 +335,10 @@ export default function ZalohaScreen() {
 }
 
 const styles = StyleSheet.create({
+  footerRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  footerCta: { flex: 1, height: 52, borderRadius: radii.card, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  footerCancel: { height: 52, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
+  footerCancelText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(15) },
   container: { flex: 1, backgroundColor: colors.background },
   content: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32, gap: 10 },
   card: { backgroundColor: colors.card, borderRadius: radii.card, padding: 14, gap: 4 },

@@ -9,7 +9,7 @@
 // (je delší než obrazovka) a klepnutí mimo pole zavře klávesnici (C3).
 
 import { useCallback, useState } from 'react';
-import { Alert, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, FlatList, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { SymbolView } from 'expo-symbols';
 import { useFocusEffect } from 'expo-router';
@@ -211,8 +211,21 @@ export default function CategoriesSettingsScreen() {
         <Text style={styles.addButtonText}>+ PŘIDAT KATEGORII / STROJ</Text>
       </TouchableOpacity>
 
-      <BottomSheetModal visible={editing !== null} onClose={() => setEditing(null)}>
-        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      <BottomSheetModal
+        visible={editing !== null}
+        onClose={() => setEditing(null)}
+        footer={
+          <View style={styles.modalButtons}>
+            <TouchableOpacity style={styles.cancelButton} onPress={() => setEditing(null)}>
+              <Text style={styles.cancelButtonText}>Zrušit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.saveButton} onPress={handleSave} disabled={saving}>
+              <Text style={styles.saveButtonText}>{saving ? 'UKLÁDÁM...' : 'ULOŽIT'}</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
+        <>
         <Text style={styles.modalTitle}>{editing?.id === null ? 'NOVÁ KATEGORIE / STROJ' : 'UPRAVIT'}</Text>
 
         <Text style={styles.fieldLabel}>Název</Text>
@@ -288,15 +301,7 @@ export default function CategoriesSettingsScreen() {
           />
         )}
 
-        <View style={styles.modalButtons}>
-          <TouchableOpacity style={styles.cancelButton} onPress={() => setEditing(null)}>
-            <Text style={styles.cancelButtonText}>Zrušit</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.saveButton} onPress={handleSave} disabled={saving}>
-            <Text style={styles.saveButtonText}>{saving ? 'UKLÁDÁM...' : 'ULOŽIT'}</Text>
-          </TouchableOpacity>
-        </View>
-        </ScrollView>
+        </>
       </BottomSheetModal>
     </SafeAreaView>
   );
