@@ -110,7 +110,9 @@ const GEOFENCE_SETTLE_MS = 15 * 1000;
 export async function refreshGeofences(options: { force?: boolean; reason?: string } = {}): Promise<void> {
   const settings = await getSettings();
   if (!settings.locationTrackingEnabled || settings.locationMode !== 'economical') return;
-  const places = await listPlaces();
+  // Místa přidaná bez přítomnosti (práce kolegy) se nehlídají - iOS umí
+  // jen 20 oblastí a pobyty na nich nevznikají (migrace v6).
+  const places = (await listPlaces()).filter((p) => p.monitored);
   if (places.length === 0) {
     await stopGeofencing();
     return;

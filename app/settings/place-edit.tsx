@@ -19,6 +19,8 @@ import ScreenHeader from '@/components/ScreenHeader';
 import SegmentedControl from '@/components/SegmentedControl';
 import ToggleRow from '@/components/ToggleRow';
 import { createPlace, listPlaces, updatePlace } from '@/lib/db';
+import type { PlaceSource } from '@/lib/types';
+import DochazkaNative from '../../modules/dochazka-native/src/DochazkaNative';
 import { refreshGeofences } from '@/lib/locationTracking';
 import { rebuildRecentVisits } from '@/lib/visits';
 import { colors, fonts, radii, MIN_TOUCH, fs } from '@/theme';
@@ -44,6 +46,10 @@ export default function PlaceEditScreen() {
   const [orderLabel, setOrderLabel] = useState('');
   const [isHome, setIsHome] = useState(false);
   const [isPrivate, setIsPrivate] = useState(false);
+  const [monitored, setMonitored] = useState(true);
+  const [source, setSource] = useState<PlaceSource>('visit');
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<{ name: string; subtitle: string; latitude: number; longitude: number }[] | null>(null);
   const [coords, setCoords] = useState(DEFAULT_COORDS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -59,6 +65,7 @@ export default function PlaceEditScreen() {
           setOrderLabel(existing.orderLabel);
           setIsHome(existing.isHome);
           setIsPrivate(existing.isPrivate);
+          setMonitored(existing.monitored);
           setCoords({ latitude: existing.latitude, longitude: existing.longitude });
         }
       } else if (lat && lon) {
@@ -85,6 +92,16 @@ export default function PlaceEditScreen() {
     setCoords({ latitude: event.coordinates.latitude, longitude: event.coordinates.longitude });
   }, []);
 
+  // Doplněk etapy 5: místo podle adresy / obce (MapKit) - i bez přítomnosti.
+  const search = async () => {
+    if (!query.trim()) return;
+    try {
+      setResults(await DochazkaNative.searchPlaces(query.trim(), coords.latitude, coords.longitude));
+    } catch (err) {
+      Alert.alert('Hledání se nepovedlo', `${err instanceof Error ? err.message : String(err)}\n\nHledání potřebuje internet.`);
+    }
+  };
+
   const handleSave = async () => {
     const trimmedName = name.trim();
     if (!trimmedName) {
@@ -101,6 +118,8 @@ export default function PlaceEditScreen() {
         orderLabel,
         isHome,
         isPrivate: isHome || isPrivate,
+        monitored: isHome || monitored,
+        ...(placeId ? {} : { source }),
       };
       if (placeId) {
         await updatePlace(placeId, fields);
@@ -124,7 +143,37 @@ export default function PlaceEditScreen() {
       <ScreenHeader title={placeId ? 'UPRAVIT MÍSTO' : 'NOVÉ MÍSTO'} />
 
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.hint}>Mapa se otevřela na tvojí aktuální poloze - klepnutím kamkoliv jinam značku přesuneš.</Text>
+        <Text style={styles.hint}>Mapa se otevřela na tvojí aktuální poloze - klepnutím kamkoliv jinam značku přesuneš, nebo místo vyhledej.</Text>
+
+        <TextInput
+          style={styles.input}
+          value={query}
+          onChangeText={(t) => {
+            setQuery(t);
+            setResults(null);
+          }}
+          onSubmitEditing={search}
+          returnKeyType="search"
+          placeholder="Hledat adresu, obec nebo firmu"
+          placeholderTextColor={colors.textMuted}
+          inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+        />
+        {results?.length === 0 && <Text style={styles.hint}>Nic nenalezeno.</Text>}
+        {results?.map((r, i) => (
+          <TouchableOpacity
+            key={`${r.latitude},${r.longitude},${i}`}
+            style={styles.result}
+            onPress={() => {
+              setCoords({ latitude: r.latitude, longitude: r.longitude });
+              if (!name.trim()) setName(r.name);
+              if (!placeId) setSource('search');
+              setResults(null);
+            }}
+          >
+            <Text style={styles.resultName}>{r.name}</Text>
+            {!!r.subtitle && <Text style={styles.hint}>{r.subtitle}</Text>}
+          </TouchableOpacity>
+        ))}
 
         <View style={styles.mapWrap}>
           <AppleMaps.View
@@ -203,6 +252,19 @@ export default function PlaceEditScreen() {
           />
         </View>
 
+        <ToggleRow
+          label="Hlídat místo"
+          description={
+            isHome
+              ? 'Domov se hlídá vždy'
+              : 'Geofence a pobyty na místě. Vypni u míst, kde pracují jen kolegové / stroj (iOS hlídá nejvýš 20 míst).'
+          }
+          value={isHome || monitored}
+          onValueChange={(v) => {
+            if (!isHome) setMonitored(v);
+          }}
+        />
+
         <TouchableOpacity style={styles.saveButton} onPress={handleSave} disabled={saving}>
           <Text style={styles.saveButtonText}>{saving ? 'UKLÁDÁM...' : 'ULOŽIT'}</Text>
         </TouchableOpacity>
@@ -212,6 +274,8 @@ export default function PlaceEditScreen() {
 }
 
 const styles = StyleSheet.create({
+  result: { minHeight: MIN_TOUCH, justifyContent: 'center', borderBottomWidth: 1, borderBottomColor: colors.border, paddingVertical: 6 },
+  resultName: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(14) },
   container: { flex: 1, backgroundColor: colors.background },
   content: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32 },
   hint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginBottom: 10, lineHeight: 17 },

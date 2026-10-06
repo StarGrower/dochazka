@@ -29,7 +29,7 @@ import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import StaySheet, { type StayRow, type StaySheetTarget } from '@/components/StaySheet';
 import TripSheet, { type TripEdit } from '@/components/TripSheet';
-import WorkItemSheet, { type WorkItemSheetMode } from '@/components/WorkItemSheet';
+import WorkItemSheet, { type ItemAssignment, type WorkItemSheetMode } from '@/components/WorkItemSheet';
 import {
   addDayRecord,
   deleteDayRecord,
@@ -42,6 +42,7 @@ import {
   getTripsForDay,
   getVisitsForDay,
   listCategories,
+  listPlaces,
   listRoutePointsForTrips,
   recordedPlacesForDate,
   setPlaceSuggestionLock,
@@ -65,9 +66,9 @@ import {
 import { geocodeKey, nearLocalityLabel, resolveLocalities } from '@/lib/geocode';
 import { holidayName, isWeekend } from '@/lib/holidays';
 import { tripKm } from '@/lib/tripPlan';
-import type { AppSettings, DayWorkRecordWithCategory, RateUnit, RoutePoint, Trip, VisitWithPlace, WorkCategory } from '@/lib/types';
+import { ME_ID, type AppSettings, type DayWorkRecordWithCategory, type Person, type Place, type RateUnit, type RoutePoint, type Trip, type VisitWithPlace, type WorkCategory } from '@/lib/types';
 import { defectWarningFor } from '@/lib/machines';
-import { assignOrdersAuto, listOrders, setRecordOrder, setTripOrder } from '@/lib/orders';
+import { assignOrdersAuto, listOrders, listPeople, setRecordOrder, setTripOrder } from '@/lib/orders';
 import { evaluateRemindersSafe, proposalForStay, workStaysForDate } from '@/lib/reminders';
 import { formatDurationHM } from '@/lib/stayProposal';
 import { refreshTrips } from '@/lib/visits';
@@ -76,7 +77,6 @@ import {
   dayDefaultsProposal,
   priceForRecord,
   recordAmountKc,
-  surchargePctFor,
   type DefaultItemProposal,
 } from '@/lib/workCalc';
 import { colors, fonts, radii, fs } from '@/theme';
@@ -147,12 +147,16 @@ export default function DayDetailScreen() {
   const [staySheetTarget, setStaySheetTarget] = useState<StaySheetTarget | null>(null);
   const [stayParamDone, setStayParamDone] = useState(false);
   const [orderOptions, setOrderOptions] = useState<{ id: number; name: string }[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [places, setPlaces] = useState<Place[]>([]);
 
   const load = useCallback(async () => {
     if (!date) return;
     // Etapa 5: nepřiřazené zápisy a přejezdy dne -> zakázky podle míst.
     await assignOrdersAuto(date, date).catch(() => {});
     setOrderOptions((await listOrders()).filter((o) => o.status !== 'paid').map((o) => ({ id: o.id, name: o.name })));
+    setPeople(await listPeople());
+    setPlaces(await listPlaces());
     const [s, r, n, c, v, t] = await Promise.all([
       getSettings(),
       getDayRecords(date),
@@ -221,8 +225,8 @@ export default function DayDetailScreen() {
   const categories = useMemo(() => allCategories.filter((c) => !c.isDeleted), [allCategories]);
   const categoryById = useMemo(() => new Map(allCategories.map((c) => [c.id, c])), [allCategories]);
   const proposals = useMemo(
-    () => (settings && date ? dayDefaultsProposal(date, todayIso(), settings, categories, records.length) : []),
-    [settings, date, categories, records.length]
+    () => (settings && date ? dayDefaultsProposal(date, todayIso(), settings, categories, records.filter((r) => r.workerId === ME_ID).length) : []),
+    [settings, date, categories, records]
   );
 
   const openAdd = useCallback(
@@ -248,17 +252,26 @@ export default function DayDetailScreen() {
     if (text) Alert.alert('Nevyřešená závada', text);
   };
 
-  const handleAdd = async (category: WorkCategory, unit: RateUnit, quantity: number) => {
+  const workerById = (id: number) => people.find((p) => p.id === id) ?? null;
+  const priceFor = (category: WorkCategory, unit: RateUnit, workerId: number) =>
+    settings && date ? priceForRecord(date, category, unit, settings, workerById(workerId)) : { rateKc: 0, surchargePct: 0 };
+
+  const handleAdd = async (category: WorkCategory, unit: RateUnit, quantity: number, a: ItemAssignment) => {
     if (!date || !settings) return;
-    const suggested = sheetMode?.kind === 'add' && sheetMode.suggestedHours !== null && unit === 'hour';
+    const suggested = sheetMode?.kind === 'add' && sheetMode.suggestedHours !== null && unit === 'hour' && a.workerId === ME_ID;
     await warnDefects([category.id]);
     await addDayRecord({
       date,
       categoryId: category.id,
       quantity,
       unit,
-      ...priceForRecord(date, category, unit, settings),
+      ...priceFor(category, unit, a.workerId),
       source: suggested ? 'suggestion' : 'manual',
+      placeId: a.placeId,
+      orderId: a.orderId,
+      workerId: a.workerId,
+      timeFrom: a.timeFrom,
+      timeTo: a.timeTo,
     });
     setSheetMode(null);
     await load();
@@ -267,7 +280,7 @@ export default function DayDetailScreen() {
   const handleAddDefaults = async (items: DefaultItemProposal[]) => {
     if (!date || !settings) return;
     // Pojistka proti dvojímu uložení (rychlé dvojklepnutí / souběh).
-    if ((await getDayRecords(date)).length > 0) {
+    if ((await getDayRecords(date)).some((r) => r.workerId === ME_ID)) {
       setSheetMode(null);
       await load();
       return;
@@ -289,11 +302,24 @@ export default function DayDetailScreen() {
 
   // Změna jednotky vezme sazbu té jednotky z AKTUÁLNÍHO ceníku; uložený
   // příplatek položky zůstává.
-  const handleSaveRecord = async (record: DayWorkRecordWithCategory, unit: RateUnit, quantity: number, orderId: number | null) => {
+  // Změna jednotky nebo pracovníka = nová sazba (u pracovníka i příplatek);
+  // vyfakturovaná položka si sazbu nechá.
+  const handleSaveRecord = async (record: DayWorkRecordWithCategory, unit: RateUnit, quantity: number, a: ItemAssignment) => {
     const category = categoryById.get(record.categoryId);
-    const rateKc = unit === record.unit || !category ? record.rateKc : category.rates[unit];
-    await updateDayRecord(record.id, { quantity, unit, rateKc });
-    if (orderId !== record.orderId) await setRecordOrder(record.id, orderId);
+    const invoiced = record.invoiceBatchId !== null;
+    let rateKc = record.rateKc;
+    let surchargePct: number | undefined;
+    if (category && !invoiced && a.workerId !== record.workerId) {
+      ({ rateKc, surchargePct } = priceFor(category, unit, a.workerId));
+    } else if (category && !invoiced && unit !== record.unit) {
+      rateKc = priceFor(category, unit, a.workerId).rateKc;
+    }
+    await updateDayRecord(record.id, { quantity, unit, rateKc, surchargePct, placeId: a.placeId, workerId: a.workerId, timeFrom: a.timeFrom, timeTo: a.timeTo });
+    if (!invoiced) {
+      if (a.orderId !== record.orderId) await setRecordOrder(record.id, a.orderId);
+      // Jiné místo a zakázka nechaná být -> znovu automaticky podle místa.
+      else if (a.placeId !== record.placeId) await setRecordOrder(record.id, null);
+    }
     setSheetMode(null);
     await load();
   };
@@ -587,21 +613,42 @@ export default function DayDetailScreen() {
     router.back();
   };
 
+  // Hlavička dne = moje hodiny (docházka); Kč za všechny položky dne.
   const totals = records.reduce(
     (acc, r) => {
       acc.kc += recordAmountKc(r);
-      acc[r.unit] += r.quantity;
+      if (r.workerId === ME_ID) acc[r.unit] += r.quantity;
+      else if (r.unit === 'hour') acc.othersHour += r.quantity;
       return acc;
     },
-    { kc: 0, hour: 0, day: 0, km: 0 }
+    { kc: 0, hour: 0, day: 0, km: 0, othersHour: 0 }
   );
   const totalsLabel = [
     totals.hour > 0 ? formatQuantity(totals.hour, 'hour') : null,
     totals.day > 0 ? formatQuantity(totals.day, 'day') : null,
     totals.km > 0 ? formatQuantity(totals.km, 'km') : null,
+    totals.othersHour > 0 ? `kolegové ${formatQuantity(totals.othersHour, 'hour')}` : null,
   ]
     .filter(Boolean)
     .join('  +  ');
+
+  // Položky seskupené podle místa (doplněk etapy 5) - hlavička skupiny jen
+  // když je víc míst nebo položka u konkrétního místa.
+  const placeName = (id: number | null) => (id === null ? 'Podle mých pobytů' : (places.find((p) => p.id === id)?.name ?? 'Smazané místo'));
+  const groupOrder: (number | null)[] = [];
+  for (const r of records) if (!groupOrder.includes(r.placeId)) groupOrder.push(r.placeId);
+  const showGroups = groupOrder.length > 1 || (groupOrder.length === 1 && groupOrder[0] !== null);
+  type ListRow = { kind: 'group'; key: string; title: string; kc: number } | { kind: 'record'; key: string; record: DayWorkRecordWithCategory };
+  const listRows: ListRow[] = showGroups
+    ? groupOrder.flatMap((pid) => {
+        const items = records.filter((r) => r.placeId === pid);
+        return [
+          { kind: 'group' as const, key: `g${pid ?? 'auto'}`, title: placeName(pid), kc: items.reduce((sum, r) => sum + recordAmountKc(r), 0) },
+          ...items.map((r) => ({ kind: 'record' as const, key: String(r.id), record: r })),
+        ];
+      })
+    : records.map((r) => ({ kind: 'record' as const, key: String(r.id), record: r }));
+  const dayPlaceIds = [...new Set(visits.filter((v) => v.placeId !== null && !v.placeIsPrivate).map((v) => v.placeId as number))];
 
   if (!date || !settings) return null;
 
@@ -653,8 +700,8 @@ export default function DayDetailScreen() {
       )}
 
       <FlatList
-        data={records}
-        keyExtractor={(r) => String(r.id)}
+        data={listRows}
+        keyExtractor={(r) => r.key}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
           <>
@@ -759,22 +806,38 @@ export default function DayDetailScreen() {
             <Text style={styles.sectionHeader}>PRÁCE A STROJE</Text>
           </>
         }
-        renderItem={({ item }) => (
-          <TouchableOpacity style={styles.row} onPress={() => setSheetMode({ kind: 'edit', record: item })}>
-            <View style={[styles.colorSwatch, { backgroundColor: item.color }]} />
-            <View style={styles.rowMain}>
-              <Text style={styles.rowName}>
-                {item.categoryName}
-                {item.categoryDeleted ? ' (smazáno)' : ''}
-              </Text>
-              <Text style={styles.rowRate}>
-                {formatQuantity(item.quantity, item.unit)} · {formatNumberCs(item.rateKc)} {UNIT_RATE_LABEL[item.unit]}
-                {item.surchargePct > 0 ? ` · +${formatNumberCs(item.surchargePct)} %` : ''}
-              </Text>
-            </View>
-            <Text style={styles.rowQuantity}>{formatKc(recordAmountKc(item))}</Text>
-          </TouchableOpacity>
-        )}
+        renderItem={({ item: row }) => {
+          if (row.kind === 'group') {
+            return (
+              <View style={styles.groupHeader}>
+                <Text style={styles.groupTitle} numberOfLines={1}>
+                  {row.title}
+                </Text>
+                <Text style={styles.groupKc}>{formatKc(row.kc)}</Text>
+              </View>
+            );
+          }
+          const item = row.record;
+          const worker = item.workerId !== ME_ID ? (people.find((p) => p.id === item.workerId)?.name ?? 'kolega') : null;
+          return (
+            <TouchableOpacity style={styles.row} onPress={() => setSheetMode({ kind: 'edit', record: item })}>
+              <View style={[styles.colorSwatch, { backgroundColor: item.color }]} />
+              <View style={styles.rowMain}>
+                <Text style={styles.rowName}>
+                  {item.categoryName}
+                  {item.categoryDeleted ? ' (smazáno)' : ''}
+                  {worker ? <Text style={styles.rowWorker}> · {worker}</Text> : null}
+                </Text>
+                <Text style={styles.rowRate}>
+                  {formatQuantity(item.quantity, item.unit)} · {formatNumberCs(item.rateKc)} {UNIT_RATE_LABEL[item.unit]}
+                  {item.surchargePct > 0 ? ` · +${formatNumberCs(item.surchargePct)} %` : ''}
+                  {item.timeFrom && item.timeTo ? ` · ${item.timeFrom}–${item.timeTo}` : ''}
+                </Text>
+              </View>
+              <Text style={styles.rowQuantity}>{formatKc(recordAmountKc(item))}</Text>
+            </TouchableOpacity>
+          );
+        }}
         ListFooterComponent={
           <>
             <TouchableOpacity style={styles.addRowButton} onPress={() => openAdd()}>
@@ -807,13 +870,18 @@ export default function DayDetailScreen() {
         categories={categories}
         categoryById={categoryById}
         settings={settings}
-        surchargePctFor={(category) => surchargePctFor(date, category, settings)}
+        priceFor={priceFor}
         onClose={() => setSheetMode(null)}
         onAdd={handleAdd}
         onAddDefaults={handleAddDefaults}
         onSave={handleSaveRecord}
         orders={orderOptions}
         onDelete={handleDeleteRecord}
+        places={places}
+        dayPlaceIds={dayPlaceIds}
+        people={people}
+        onPlaceCreated={(place) => setPlaces((list) => [...list, place])}
+        onPeopleChanged={async () => setPeople(await listPeople())}
       />
 
       <StaySheet
@@ -938,6 +1006,10 @@ const styles = StyleSheet.create({
   colorSwatch: { width: 14, height: 14, borderRadius: 3 },
   rowMain: { flex: 1 },
   rowName: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(15) },
+  rowWorker: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: fs(13) },
+  groupHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, marginBottom: 4, gap: 8 },
+  groupTitle: { color: colors.textMuted, fontFamily: fonts.headingBold, fontSize: fs(13), letterSpacing: 0.8, flex: 1 },
+  groupKc: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12) },
   rowRate: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginTop: 2 },
   rowQuantity: { color: colors.accent, fontFamily: fonts.headingBold, fontSize: fs(16) },
   empty: { color: colors.textMuted, textAlign: 'center', fontFamily: fonts.body, marginVertical: 16 },

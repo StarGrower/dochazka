@@ -18,7 +18,8 @@ import ToggleRow from '@/components/ToggleRow';
 import { getSettings, listPlaces } from '@/lib/db';
 import { toIsoDate } from '@/lib/format';
 import { collectReport, reportCsv, reportHtml, reportXlsx, type ReportOptions } from '@/lib/report';
-import type { AppSettings, Place } from '@/lib/types';
+import { listPeople } from '@/lib/orders';
+import type { AppSettings, Person, Place } from '@/lib/types';
 import { colors, fonts, fs, MIN_TOUCH, radii } from '@/theme';
 
 type PeriodKey = 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth' | 'custom';
@@ -63,6 +64,8 @@ export default function VykazScreen() {
   const [customFrom, setCustomFrom] = useState(czDate(periodRange('thisMonth').from));
   const [customTo, setCustomTo] = useState(czDate(toIsoDate(new Date())));
   const [placeIds, setPlaceIds] = useState<number[] | null>(null);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [workerId, setWorkerId] = useState<number | null>(null);
   const [withPrices, setWithPrices] = useState(true);
   const [withMap, setWithMap] = useState(false);
   const [detailed, setDetailed] = useState(false);
@@ -73,6 +76,7 @@ export default function VykazScreen() {
   const load = useCallback(async () => {
     setSettings(await getSettings());
     setPlaces((await listPlaces()).filter((p) => !p.isPrivate && !p.isHome));
+    setPeople(await listPeople());
   }, []);
 
   // useCallback je NUTNÝ - bez něj se `load` spustí po každém
@@ -108,6 +112,7 @@ export default function VykazScreen() {
       const options: ReportOptions = {
         ...r,
         placeIds,
+        workerId,
         withPrices,
         withMap: withMap && format === 'pdf',
         detailed,
@@ -170,7 +175,7 @@ export default function VykazScreen() {
 
         {places.length > 0 && (
           <>
-            <Text style={styles.sectionHeader}>MÍSTA (ZAKÁZKY PŘIBUDOU V ETAPĚ 5)</Text>
+            <Text style={styles.sectionHeader}>MÍSTA</Text>
             <View style={styles.chips}>
               <TouchableOpacity style={[styles.chip, placeIds === null && styles.chipOn]} onPress={() => setPlaceIds(null)}>
                 <Text style={[styles.chipText, placeIds === null && styles.chipTextOn]}>Vše</Text>
@@ -183,6 +188,22 @@ export default function VykazScreen() {
                   </TouchableOpacity>
                 );
               })}
+            </View>
+          </>
+        )}
+
+        {people.length > 1 && (
+          <>
+            <Text style={styles.sectionHeader}>PRACOVNÍK</Text>
+            <View style={styles.chips}>
+              <TouchableOpacity style={[styles.chip, workerId === null && styles.chipOn]} onPress={() => setWorkerId(null)}>
+                <Text style={[styles.chipText, workerId === null && styles.chipTextOn]}>Všichni</Text>
+              </TouchableOpacity>
+              {people.map((p) => (
+                <TouchableOpacity key={p.id} style={[styles.chip, workerId === p.id && styles.chipOn]} onPress={() => setWorkerId(p.id)}>
+                  <Text style={[styles.chipText, workerId === p.id && styles.chipTextOn]}>{p.name}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
           </>
         )}

@@ -66,6 +66,8 @@ declare class DochazkaNativeModule extends NativeModule<DochazkaNativeEvents> {
   recognizeText(base64Jpeg: string): Promise<string[]>; // Apple Vision, offline
   nearbyGasStation(latitude: number, longitude: number, radiusM: number): Promise<string>; // '' = žádná
   bluetoothAudioRoute(): string; // název Bluetooth/CarPlay výstupu, '' = žádný
+  // doplněk etapy 5 - hledání adresy / obce pro místo bez přítomnosti (MapKit)
+  searchPlaces(query: string, nearLatitude: number, nearLongitude: number): Promise<{ name: string; subtitle: string; latitude: number; longitude: number }[]>;
   // --- místní upozornění ---
   requestNotificationPermission(): Promise<boolean>;
   getNotificationPermission(): Promise<'granted' | 'denied' | 'undetermined'>;

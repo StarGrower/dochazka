@@ -15,7 +15,7 @@ import { getDb, getVisitsForDay, listCategories, listPlaces } from './db';
 import { toIsoDate } from './format';
 import { computeOrderStats, type OrderStats } from './orderStats';
 import { tripKm } from './tripPlan';
-import type { Client, ExpenseCategory, InvoiceBatch, Order, OrderExpense, OrderPriceMode, OrderStatus, Person } from './types';
+import { ME_ID, type Client, type ExpenseCategory, type InvoiceBatch, type Order, type OrderExpense, type OrderPriceMode, type OrderStatus, type Person } from './types';
 
 // --- odběratelé ---
 
@@ -157,14 +157,15 @@ export async function assignOrdersAuto(fromDate: string | null = null, toDate: s
   }
   const range = 'AND date >= ? AND date <= ?';
   const rangeParams = [fromDate, toDate];
-  const records = await db.getAllAsync<{ id: number; date: string; place_id: number | null }>(
-    `SELECT id, date, place_id FROM day_work_records WHERE order_id IS NULL AND invoice_batch_id IS NULL ${range}`,
+  const records = await db.getAllAsync<{ id: number; date: string; place_id: number | null; worker_id: number }>(
+    `SELECT id, date, place_id, worker_id FROM day_work_records WHERE order_id IS NULL AND invoice_batch_id IS NULL ${range}`,
     rangeParams
   );
   const dayCandidates = new Map<string, number | null>(); // den -> jediná zakázka podle pobytů
   for (const r of records) {
     let orderId = orderFor(orders, r.place_id, r.date);
-    if (orderId === null && r.place_id === null) {
+    // Zápis bez místa podle MÝCH pobytů jen u mojí práce (kolega mohl být jinde).
+    if (orderId === null && r.place_id === null && r.worker_id === ME_ID) {
       if (!dayCandidates.has(r.date)) {
         const visits = await getVisitsForDay(r.date);
         const ids = new Set(visits.map((v) => orderFor(orders, v.placeId, r.date)).filter((x): x is number => x !== null));
@@ -221,15 +222,22 @@ export async function listInvoiceBatches(orderId: number | null = null): Promise
 }
 
 // Vše nevyfakturované u zakázky -> jeden podklad (žádné dvojí účtování).
-export async function createInvoiceBatch(order: Order, totalKc: number, note: string): Promise<number> {
+// Filtr podle pracovníka (doplněk etapy 5): jen jeho položky a jízdy, kde
+// řídil; výdaje patří zakázce, ne pracovníkovi -> jen podklad bez filtru.
+export async function createInvoiceBatch(order: Order, totalKc: number, note: string, workerId: number | null = null): Promise<number> {
   const db = await getDb();
   let batchId = 0;
+  const w = workerId !== null ? ' AND worker_id = ?' : '';
+  const wt = workerId !== null ? ' AND driver_id = ?' : '';
+  const wp = workerId !== null ? [workerId] : [];
   await db.withExclusiveTransactionAsync(async (txn) => {
     const r = await txn.runAsync('INSERT INTO invoice_batches (order_id, total_kc, note) VALUES (?, ?, ?)', [order.id, totalKc, note]);
     batchId = r.lastInsertRowId;
-    await txn.runAsync('UPDATE day_work_records SET invoice_batch_id = ? WHERE order_id = ? AND invoice_batch_id IS NULL', [batchId, order.id]);
-    await txn.runAsync('UPDATE trips SET invoice_batch_id = ? WHERE order_id = ? AND invoice_batch_id IS NULL AND is_deleted = 0', [batchId, order.id]);
-    await txn.runAsync('UPDATE order_expenses SET invoice_batch_id = ? WHERE order_id = ? AND invoice_batch_id IS NULL AND is_deleted = 0', [batchId, order.id]);
+    await txn.runAsync(`UPDATE day_work_records SET invoice_batch_id = ? WHERE order_id = ? AND invoice_batch_id IS NULL${w}`, [batchId, order.id, ...wp]);
+    await txn.runAsync(`UPDATE trips SET invoice_batch_id = ? WHERE order_id = ? AND invoice_batch_id IS NULL AND is_deleted = 0${wt}`, [batchId, order.id, ...wp]);
+    if (workerId === null) {
+      await txn.runAsync('UPDATE order_expenses SET invoice_batch_id = ? WHERE order_id = ? AND invoice_batch_id IS NULL AND is_deleted = 0', [batchId, order.id]);
+    }
     if (order.status === 'done') await txn.runAsync("UPDATE orders SET status = 'invoiced' WHERE id = ?", [order.id]);
   });
   return batchId;
@@ -264,10 +272,30 @@ export interface OrderDetail {
   lastDate: string | null;
 }
 
-export async function listPeople(): Promise<Person[]> {
+// Pracovníci = řidiči (tabulka people, id 1 = já).
+export async function listPeople(includeDeleted = false): Promise<Person[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<{ id: number; name: string; is_me: number }>('SELECT id, name, is_me FROM people WHERE is_deleted = 0 ORDER BY id');
-  return rows.map((r) => ({ id: r.id, name: r.name, isMe: r.is_me === 1 }));
+  const rows = await db.getAllAsync<{ id: number; name: string; is_me: number; rate_hour_kc: number | null; rate_day_kc: number | null; billable: number | null }>(
+    `SELECT id, name, is_me, rate_hour_kc, rate_day_kc, billable FROM people ${includeDeleted ? '' : 'WHERE is_deleted = 0'} ORDER BY is_me DESC, name`
+  );
+  return rows.map((r) => ({ id: r.id, name: r.name, isMe: r.is_me === 1, rateHourKc: r.rate_hour_kc, rateDayKc: r.rate_day_kc, billable: r.billable !== 0 }));
+}
+
+export async function savePerson(p: Omit<Person, 'id' | 'isMe'> & { id?: number | null }): Promise<number> {
+  const db = await getDb();
+  if (p.id) {
+    await db.runAsync('UPDATE people SET name = ?, rate_hour_kc = ?, rate_day_kc = ?, billable = ? WHERE id = ?', [p.name, p.rateHourKc, p.rateDayKc, p.billable ? 1 : 0, p.id]);
+    return p.id;
+  }
+  const r = await db.runAsync('INSERT INTO people (name, is_me, rate_hour_kc, rate_day_kc, billable) VALUES (?, 0, ?, ?, ?)', [p.name, p.rateHourKc, p.rateDayKc, p.billable ? 1 : 0]);
+  return r.lastInsertRowId;
+}
+
+// Měkké smazání - staré zápisy si jméno pracovníka nechají.
+export async function deletePerson(id: number): Promise<void> {
+  if (id === ME_ID) return;
+  const db = await getDb();
+  await db.runAsync('UPDATE people SET is_deleted = 1 WHERE id = ?', [id]);
 }
 
 // Výchozí vozidlo pro km bez vozidla: stroj s výchozí jednotkou Kč/km.
@@ -284,17 +312,19 @@ export function setOrderFuelCostProvider(fn: typeof orderFuelCost): void {
   orderFuelCost = fn;
 }
 
-export async function getOrderDetail(orderId: number): Promise<OrderDetail | null> {
+// workerId: přehled jen pro jednoho pracovníka (podklad, export); bez
+// výdajů, ty patří celé zakázce.
+export async function getOrderDetail(orderId: number, workerId: number | null = null): Promise<OrderDetail | null> {
   const order = await getOrder(orderId);
   if (!order) return null;
   const db = await getDb();
   const records = await db.getAllAsync<{
     category_id: number; category_name: string; color: string; unit: 'hour' | 'day' | 'km'; quantity: number; rate_kc: number;
-    surcharge_pct: number; date: string; author_id: number; invoice_batch_id: number | null;
+    surcharge_pct: number; date: string; worker_id: number; invoice_batch_id: number | null;
   }>(
-    `SELECT r.category_id, c.name as category_name, c.color, r.unit, r.quantity, r.rate_kc, r.surcharge_pct, r.date, r.author_id, r.invoice_batch_id
-     FROM day_work_records r JOIN work_categories c ON c.id = r.category_id WHERE r.order_id = ? ORDER BY r.date`,
-    [orderId]
+    `SELECT r.category_id, c.name as category_name, c.color, r.unit, r.quantity, r.rate_kc, r.surcharge_pct, r.date, r.worker_id, r.invoice_batch_id
+     FROM day_work_records r JOIN work_categories c ON c.id = r.category_id WHERE r.order_id = ? ${workerId !== null ? 'AND r.worker_id = ?' : ''} ORDER BY r.date`,
+    workerId !== null ? [orderId, workerId] : [orderId]
   );
   // Přejezdy bez km v Práci a strojích (jinak by se počítaly dvakrát).
   const trips = await db.getAllAsync<{
@@ -302,19 +332,20 @@ export async function getOrderDetail(orderId: number): Promise<OrderDetail | nul
     invoice_batch_id: number | null;
   }>(
     `SELECT t.start_at, t.distance_m, t.road_distance_m, t.km_override, t.vehicle_category_id, t.invoice_batch_id FROM trips t
-     WHERE t.order_id = ? AND t.is_deleted = 0 AND t.is_private = 0
+     WHERE t.order_id = ? AND t.is_deleted = 0 AND t.is_private = 0 ${workerId !== null ? 'AND t.driver_id = ?' : ''}
        AND (t.work_record_id IS NULL OR NOT EXISTS (SELECT 1 FROM day_work_records r WHERE r.id = t.work_record_id))`,
-    [orderId]
+    workerId !== null ? [orderId, workerId] : [orderId]
   );
   const rates = await kmRates();
-  const [expenses, batches, people, fuel] = await Promise.all([listExpenses(orderId), listInvoiceBatches(orderId), listPeople(), orderFuelCost(orderId)]);
+  const [allExpenses, batches, people, fuel] = await Promise.all([listExpenses(orderId), listInvoiceBatches(orderId), listPeople(true), orderFuelCost(orderId)]);
+  const expenses = workerId === null ? allExpenses : [];
   const stats = computeOrderStats({
     priceMode: order.priceMode,
     fixedPriceKc: order.fixedPriceKc,
     budgetKc: order.budgetKc,
     records: records.map((r) => ({
       categoryId: r.category_id, categoryName: r.category_name, color: r.color, unit: r.unit, quantity: r.quantity, rateKc: r.rate_kc,
-      surchargePct: r.surcharge_pct, date: r.date, authorId: r.author_id, invoiceBatchId: r.invoice_batch_id,
+      surchargePct: r.surcharge_pct, date: r.date, workerId: r.worker_id, invoiceBatchId: r.invoice_batch_id,
     })),
     trips: trips.map((t) => ({
       km: tripKm({ kmOverride: t.km_override, distanceM: t.distance_m, roadDistanceM: t.road_distance_m }),

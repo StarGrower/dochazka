@@ -38,6 +38,7 @@ import type {
   DebugLogEntry,
   MonthDaySummary,
   Place,
+  PlaceSource,
   RateType,
   RateUnit,
   RoutePoint,
@@ -219,7 +220,7 @@ async function migrateAddCategoryKind(db: SQLite.SQLiteDatabase): Promise<void> 
 // telefonu se nesmí ztratit". Migrace samy nic fyzicky nemažou (jen
 // is_deleted / přesun do *_removed tabulek).
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 // Záloha se dělá před první čekající migrací; jméno podle verze, ze které
 // se migruje (existující záloha se nikdy nepřepisuje).
 function backupFileName(fromVersion: number): string {
@@ -267,6 +268,10 @@ async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: 
   if (version < 5) {
     await migrateV5(db);
     await db.execAsync('PRAGMA user_version = 5');
+  }
+  if (version < 6) {
+    await migrateV6Workers(db);
+    await db.execAsync('PRAGMA user_version = 6');
   }
 }
 
@@ -842,6 +847,25 @@ async function migrateV5(db: SQLite.SQLiteDatabase): Promise<void> {
   `);
 }
 
+// Doplněk etapy 5 - práce mimo moje pobyty: pracovník u položky (kolega /
+// jen stroj), výchozí sazba a "fakturovat" u pracovníka, čas od-do,
+// místa bez přítomnosti (nehlídaná). Jen přidání sloupců - dosavadní
+// zápisy jsou moje, dosavadní místa se hlídají dál.
+async function migrateV6Workers(db: SQLite.SQLiteDatabase): Promise<void> {
+  await addColumnIfMissing(db, 'people', 'rate_hour_kc', 'REAL');
+  await addColumnIfMissing(db, 'people', 'rate_day_kc', 'REAL');
+  await addColumnIfMissing(db, 'people', 'billable', 'INTEGER NOT NULL DEFAULT 1');
+  await addColumnIfMissing(db, 'day_work_records', 'worker_id', 'INTEGER NOT NULL DEFAULT 1');
+  await addColumnIfMissing(db, 'day_work_records', 'time_from', 'TEXT');
+  await addColumnIfMissing(db, 'day_work_records', 'time_to', 'TEXT');
+  await addColumnIfMissing(db, 'places', 'monitored', 'INTEGER NOT NULL DEFAULT 1');
+  await addColumnIfMissing(db, 'places', 'source', "TEXT NOT NULL DEFAULT 'visit'");
+  await db.execAsync(`
+    CREATE INDEX IF NOT EXISTS idx_day_work_records_worker ON day_work_records (worker_id);
+    CREATE INDEX IF NOT EXISTS idx_day_work_records_place ON day_work_records (place_id);
+  `);
+}
+
 // Vestavěné šablony strojů (etapa 6) s výchozím servisním plánem -
 // intervaly jsou obvyklé hodnoty, u každého stroje jdou upravit.
 const BUILTIN_TEMPLATES: { name: string; kind: string; counterUnit: string; plan: { name: string; value?: number; days?: number }[] }[] = [
@@ -1020,6 +1044,9 @@ interface DayWorkRecordRow {
   place_id: number | null;
   order_id: number | null;
   invoice_batch_id: number | null;
+  worker_id: number | null;
+  time_from: string | null;
+  time_to: string | null;
   category_name: string;
   is_deleted: number;
   color: string;
@@ -1038,6 +1065,9 @@ function mapDayWorkRecord(row: DayWorkRecordRow): DayWorkRecordWithCategory {
     rateKc: row.rate_kc,
     surchargePct: row.surcharge_pct,
     source: row.source,
+    workerId: row.worker_id ?? 1,
+    timeFrom: row.time_from ?? null,
+    timeTo: row.time_to ?? null,
     categoryName: row.category_name,
     categoryDeleted: row.is_deleted === 1,
     color: row.color,
@@ -1048,7 +1078,7 @@ export async function getDayRecords(date: string): Promise<DayWorkRecordWithCate
   const db = await getDb();
   const rows = await db.getAllAsync<DayWorkRecordRow>(
     `SELECT r.id, r.date, r.category_id, r.quantity, r.unit, r.rate_kc, r.surcharge_pct, r.source, r.place_id, r.order_id, r.invoice_batch_id,
-            c.name as category_name, c.is_deleted, c.color
+            r.worker_id, r.time_from, r.time_to, c.name as category_name, c.is_deleted, c.color
      FROM day_work_records r
      JOIN work_categories c ON c.id = r.category_id
      WHERE r.date = ?
@@ -1070,24 +1100,49 @@ export async function addDayRecord(record: {
   source: DayRecordSource;
   tripId?: number | null;
   placeId?: number | null;
+  orderId?: number | null; // null = automaticky podle místa
+  workerId?: number; // výchozí já
+  timeFrom?: string | null;
+  timeTo?: string | null;
 }): Promise<number> {
   const db = await getDb();
   const result = await db.runAsync(
-    `INSERT INTO day_work_records (date, category_id, quantity, unit, rate_kc, surcharge_pct, source, trip_id, place_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [record.date, record.categoryId, record.quantity, record.unit, record.rateKc, record.surchargePct, record.source, record.tripId ?? null, record.placeId ?? null]
+    `INSERT INTO day_work_records (date, category_id, quantity, unit, rate_kc, surcharge_pct, source, trip_id, place_id, order_id, worker_id, time_from, time_to)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [record.date, record.categoryId, record.quantity, record.unit, record.rateKc, record.surchargePct, record.source, record.tripId ?? null, record.placeId ?? null,
+      record.orderId ?? null, record.workerId ?? 1, record.timeFrom ?? null, record.timeTo ?? null]
   );
   return result.lastInsertRowId;
 }
 
-export async function updateDayRecord(id: number, fields: { quantity: number; unit: RateUnit; rateKc: number }): Promise<void> {
+export async function updateDayRecord(
+  id: number,
+  fields: { quantity: number; unit: RateUnit; rateKc: number; surchargePct?: number; placeId?: number | null; workerId?: number; timeFrom?: string | null; timeTo?: string | null }
+): Promise<void> {
   const db = await getDb();
-  await db.runAsync('UPDATE day_work_records SET quantity = ?, unit = ?, rate_kc = ? WHERE id = ?', [
-    fields.quantity,
-    fields.unit,
-    fields.rateKc,
-    id,
-  ]);
+  const sets = ['quantity = ?', 'unit = ?', 'rate_kc = ?'];
+  const args: (string | number | null)[] = [fields.quantity, fields.unit, fields.rateKc];
+  if (fields.surchargePct !== undefined) {
+    sets.push('surcharge_pct = ?');
+    args.push(fields.surchargePct);
+  }
+  if (fields.placeId !== undefined) {
+    sets.push('place_id = ?');
+    args.push(fields.placeId);
+  }
+  if (fields.workerId !== undefined) {
+    sets.push('worker_id = ?');
+    args.push(fields.workerId);
+  }
+  if (fields.timeFrom !== undefined) {
+    sets.push('time_from = ?');
+    args.push(fields.timeFrom);
+  }
+  if (fields.timeTo !== undefined) {
+    sets.push('time_to = ?');
+    args.push(fields.timeTo);
+  }
+  await db.runAsync(`UPDATE day_work_records SET ${sets.join(', ')} WHERE id = ?`, [...args, id]);
 }
 
 export async function deleteDayRecord(id: number): Promise<void> {
@@ -1120,6 +1175,8 @@ export async function setDayNote(date: string, note: string): Promise<void> {
 // Součet za den podle JEDNOTKY položky (zadání "u každého dne součet
 // hodin") - dny a km nejdou na hodiny převést bez dalšího předpokladu,
 // proto se počítají zvlášť a kalendář je zobrazí jako doplňkový údaj.
+// Kalendář = moje docházka - jen moje položky (práce kolegů je v Detailu
+// dne, zakázkách a výkazu).
 export async function getMonthSummary(
   year: number,
   month: number // 1-12
@@ -1135,7 +1192,7 @@ export async function getMonthSummary(
             SUM(CASE WHEN unit = 'day' THEN quantity ELSE 0 END) as days,
             SUM(CASE WHEN unit = 'km' THEN quantity ELSE 0 END) as km
      FROM day_work_records
-     WHERE date BETWEEN ? AND ?
+     WHERE date BETWEEN ? AND ? AND worker_id = 1
      GROUP BY date`,
     [from, to]
   );
@@ -1275,6 +1332,8 @@ interface PlaceRow {
   is_home: number;
   is_private: number;
   is_deleted: number;
+  monitored: number | null;
+  source: PlaceSource | null;
 }
 
 function mapPlace(row: PlaceRow): Place {
@@ -1288,6 +1347,8 @@ function mapPlace(row: PlaceRow): Place {
     isHome: row.is_home === 1,
     isPrivate: row.is_private === 1 || row.is_home === 1,
     isDeleted: row.is_deleted === 1,
+    monitored: row.monitored !== 0,
+    source: row.source ?? 'visit',
   };
 }
 
@@ -1309,14 +1370,18 @@ export interface PlaceFields {
   orderLabel: string;
   isHome: boolean;
   isPrivate: boolean;
+  monitored?: boolean; // výchozí ano
+  source?: PlaceSource;
 }
 
 // Domov je vždy soukromé místo (A4) - hlídá se tady, ne jen v UI.
+// Domov se vždy hlídá (bez něj nejde poznat odjezd z domova).
 export async function createPlace(fields: PlaceFields): Promise<number> {
   const db = await getDb();
   const result = await db.runAsync(
-    'INSERT INTO places (name, latitude, longitude, radius_m, order_label, is_home, is_private) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [fields.name, fields.latitude, fields.longitude, fields.radiusM, fields.orderLabel, fields.isHome ? 1 : 0, fields.isHome || fields.isPrivate ? 1 : 0]
+    'INSERT INTO places (name, latitude, longitude, radius_m, order_label, is_home, is_private, monitored, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [fields.name, fields.latitude, fields.longitude, fields.radiusM, fields.orderLabel, fields.isHome ? 1 : 0, fields.isHome || fields.isPrivate ? 1 : 0,
+      fields.isHome || fields.monitored !== false ? 1 : 0, fields.source ?? 'visit']
   );
   return result.lastInsertRowId;
 }
@@ -1324,8 +1389,10 @@ export async function createPlace(fields: PlaceFields): Promise<number> {
 export async function updatePlace(id: number, fields: PlaceFields): Promise<void> {
   const db = await getDb();
   await db.runAsync(
-    'UPDATE places SET name = ?, latitude = ?, longitude = ?, radius_m = ?, order_label = ?, is_home = ?, is_private = ? WHERE id = ?',
-    [fields.name, fields.latitude, fields.longitude, fields.radiusM, fields.orderLabel, fields.isHome ? 1 : 0, fields.isHome || fields.isPrivate ? 1 : 0, id]
+    `UPDATE places SET name = ?, latitude = ?, longitude = ?, radius_m = ?, order_label = ?, is_home = ?, is_private = ?,
+       monitored = COALESCE(?, monitored), source = COALESCE(?, source) WHERE id = ?`,
+    [fields.name, fields.latitude, fields.longitude, fields.radiusM, fields.orderLabel, fields.isHome ? 1 : 0, fields.isHome || fields.isPrivate ? 1 : 0,
+      fields.monitored === undefined ? null : fields.isHome || fields.monitored ? 1 : 0, fields.source ?? null, id]
   );
 }
 
@@ -1932,7 +1999,8 @@ export async function listRoutePointsForTrips(tripIds: number[]): Promise<Map<nu
 export async function recordedPlacesForDate(date: string): Promise<Set<number>> {
   const db = await getDb();
   const rows = await db.getAllAsync<{ place_id: number }>(
-    'SELECT DISTINCT place_id FROM day_work_records WHERE date = ? AND place_id IS NOT NULL',
+    // jen MOJE zápisy - zápis kolegy na stejném místě neodškrtne můj pobyt
+    'SELECT DISTINCT place_id FROM day_work_records WHERE date = ? AND place_id IS NOT NULL AND worker_id = 1',
     [date]
   );
   return new Set(rows.map((r) => r.place_id));
@@ -1957,7 +2025,7 @@ export async function getPlaceSuggestion(placeId: number): Promise<PlaceSuggesti
   if (locked) return { categoryId: locked.category_id, unit: locked.unit, locked: true };
   const learned = await db.getFirstAsync<{ category_id: number; unit: RateUnit }>(
     `SELECT r.category_id, r.unit FROM (
-       SELECT category_id, unit FROM day_work_records WHERE place_id = ? ORDER BY id DESC LIMIT 30
+       SELECT category_id, unit FROM day_work_records WHERE place_id = ? AND worker_id = 1 ORDER BY id DESC LIMIT 30 -- jen moje zápisy
      ) r JOIN work_categories c ON c.id = r.category_id AND c.is_deleted = 0
      GROUP BY r.category_id, r.unit ORDER BY COUNT(*) DESC LIMIT 1`,
     [placeId]

@@ -64,7 +64,7 @@ export default function PlacesSettingsScreen() {
                 {item.name}
               </Text>
               <Text style={styles.rowDetail}>
-                poloměr {Math.round(item.radiusM)} m{item.orderLabel ? ` · ${item.orderLabel}` : ''}
+                poloměr {Math.round(item.radiusM)} m{item.orderLabel ? ` · ${item.orderLabel}` : ''}{item.monitored ? '' : ' · nehlídané'}
               </Text>
             </View>
             <TouchableOpacity hitSlop={12} onPress={() => handleDelete(item)}>

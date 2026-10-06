@@ -44,6 +44,11 @@ export interface DayWorkRecord {
   rateKc: number;
   surchargePct: number;
   source: DayRecordSource;
+  // doplněk etapy 5 (migrace v6): kdo pracoval (people.id, 1 = já) a
+  // volitelný čas od-do (HH:MM)
+  workerId: number;
+  timeFrom: string | null;
+  timeTo: string | null;
 }
 
 export interface DayWorkRecordWithCategory extends DayWorkRecord {
@@ -72,7 +77,13 @@ export interface Place {
   // pracovní doby ani do "NAVRHNOUT Z POBYTŮ", v průběhu dne je tlumené.
   isPrivate: boolean;
   isDeleted: boolean;
+  // migrace v6: hlídat geofence / pobyty (místa přidaná bez přítomnosti
+  // se nehlídají - iOS umí jen 20 oblastí) a původ místa
+  monitored: boolean;
+  source: PlaceSource;
 }
+
+export type PlaceSource = 'visit' | 'search' | 'map';
 
 // "clvisit"/"geofence" = úsporný režim (viz modules/visit-monitor),
 // "continuous" = průběžný režim (odvozeno z bodů), "manual" = ručně
@@ -195,11 +206,17 @@ export interface InvoiceBatch {
   paidAt: string | null;
 }
 
+// Pracovník / řidič (etapy 5-7, doplněk "práce mimo moje pobyty").
 export interface Person {
   id: number;
   name: string;
   isMe: boolean;
+  rateHourKc: number | null; // výchozí sazba - null = sazba práce
+  rateDayKc: number | null;
+  billable: boolean; // vypnuto = jen evidence hodin (0 Kč)
 }
+
+export const ME_ID = 1; // people.id 1 = já (migrace v5)
 
 export interface RoutePoint {
   timestamp: string;

@@ -12,7 +12,7 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Test v terénu proběhl 2.-4. 10. 2026.**
 **Oprava 2 (po terénním testu etapy 2) - HOTOVO (skupiny A-F), build OVĚŘEN (run 37210061504, 13m21s, všechny kroky zelené vč. Swift modulu, `.ipa` ~15 MB). Čeká na test v telefonu - viz "Co otestovat v telefonu (oprava 2)".**
 
-**Etapy 5-7 (zakázky, stroje, kniha jízd) + opravy po testu 5. 10. + zaokrouhlení / neznámá místa - HOTOVO jako jeden build (commit po každé etapě), viz sekce "Etapy 5-7" níž. Build OVĚŘEN (run 37425246274, 10m10s, vše zelené vč. Swift modulu, `.ipa` ~16,6 MB). Čeká na test.**
+**Etapy 5-7 (zakázky, stroje, kniha jízd) + opravy po testu 5. 10. + zaokrouhlení / neznámá místa - HOTOVO jako jeden build (commit po každé etapě), viz sekce "Etapy 5-7" níž. Build OVĚŘEN (run 37425246274, 10m10s, vše zelené vč. Swift modulu, `.ipa` ~16,6 MB). Doplněk "práce mimo moje pobyty" (migrace v6) - build čeká.**
 **Etapa 4 (záloha, stav záznamu, připomenutí, výkaz pro šéfa) - HOTOVO, build OVĚŘEN (run 37242592887, 16m52s, vše zelené vč. Swift modulu dochazka-native, `.ipa` ~15,8 MB). Čeká na test - viz "Etapa 4 - co testovat".**
 **Plán etap 4-8: `PLAN_DALSI_ETAPY.md` (jen lokálně, v `.gitignore`), grafické předlohy v `private/` (predloha-pripominka.html, predloha-zakazky.html).**
 **Etapa 3 (přejezdy, trasy, km, mapa) + ikona, logo a úvodní animace - HOTOVO, build OVĚŘEN (run 37218589500, 15m34s, vše zelené vč. react-native-maps a react-native-svg, `.ipa` ~15 MB). Čeká na test v terénu - viz "Etapa 3 - co testovat v terénu".**
@@ -151,6 +151,42 @@ opakovaně bez chyb, uuid u všech řádků, trigger u nového řádku.
 - **Export** (`lib/logbookReport.ts`) PDF (A4 na šířku) / Excel podle
   filtrů: s / bez rozpisu soukromých jízd (bez nich jen souhrn), jen moje
   / všichni řidiči, souhrn služební / soukromé km, podíl, náhrada.
+
+### Doplněk etapy 5 - práce mimo moje pobyty (migrace v6, HOTOVO)
+
+- **Migrace v6** (jen přidání; záloha `dochazka-zaloha-pred-etapou-6.db`
+  + šifrovaná): `people.rate_hour_kc`, `rate_day_kc`, `billable`;
+  `day_work_records.worker_id` (výchozí 1 = já), `time_from`, `time_to`;
+  `places.monitored` (výchozí 1), `places.source` (visit / search / map).
+  Dosavadní zápisy jsou moje, místa hlídaná, částky beze změny (ověřeno
+  lokálním testem migrace).
+- **Položka práce** (`components/WorkItemSheet.tsx`): MÍSTO (výchozí můj
+  jediný pracovní pobyt dne, jinak "Podle mých pobytů"; libovolné uložené
+  místo; nové místo bez přítomnosti - hledání přes MapKit
+  `DochazkaNative.searchPlaces` nebo bod na mapě, `components/PlacePicker.tsx`
+  přímo v panelu), PRACOVNÍK (já / ze seznamu / + nový), zakázka, čas od-do
+  (u hodin dopočítá množství). Detail dne seskupuje položky podle místa.
+- **NETRIVIÁLNÍ ROZHODNUTÍ - sazba** (`priceForRecord`, testováno):
+  pracovník s vypnutým "Fakturovat" = 0 Kč (jen evidence); výchozí sazba
+  pracovníka nahradí sazbu jen u PRÁCE, stroj se fakturuje sazbou stroje,
+  km podle vozidla. Uloží se k položce při zápisu; změna pracovníka u
+  nevyfakturované položky sazbu přepočítá.
+- **NETRIVIÁLNÍ ROZHODNUTÍ - nehlídaná místa**: místo přidané bez
+  přítomnosti má `monitored = 0` - nebere se do geofence (iOS max. 20) ani
+  do výpočtu pobytů. Jde zapnout v úpravě místa ("Hlídat místo").
+- **Jen moje**: kalendář (docházka), hlavička Detailu dne (kolegové zvlášť
+  v souhrnu), připomenutí a "zapsaný pobyt" (`recordedPlacesForDate`),
+  "Navrhnout z pobytů", výchozí položky dne, učení návrhu pobytu.
+- **Zakázky** počítají práci podle místa položky (zápis bez místa podle
+  mých pobytů jen u mojí práce), Lidé po pracovnících (`worker_id`).
+  Detail zakázky: filtr pracovníka -> přehled, export a podklad k faktuře
+  jen jeho práce (+ přejezdy, kde řídil; výdaje jen v podkladu bez filtru;
+  u pevné ceny podklad jen za celou zakázku).
+- **Výkaz pro šéfa**: filtr pracovníka, v rozpisu pracovník / místo / čas,
+  souhrn hodin po pracovnících; Excel/CSV sloupce Pracovník, Místo, Od, Do.
+- **Motohodiny** dál ze všech zápisů stroje bez ohledu na pracovníka.
+- **Nastavení → Pracovníci** (`app/settings/pracovnici.tsx`) - stejný
+  seznam jako řidiči v knize jízd.
 
 ## Etapa 4 - záloha, stav záznamu, připomenutí, výkaz pro šéfa
 

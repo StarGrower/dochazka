@@ -22,6 +22,12 @@ export default function SettingsHubScreen() {
           onPress={() => router.push('/settings/categories')}
         />
         <SettingsRow
+          icon="person.2"
+          title="Pracovníci"
+          description="Kolegové a řidiči, výchozí sazba, fakturovat / jen evidence"
+          onPress={() => router.push('/settings/pracovnici')}
+        />
+        <SettingsRow
           icon="clock"
           title="Zápisy"
           description="Délka dne, zaokrouhlení, výchozí položky, připomenutí"

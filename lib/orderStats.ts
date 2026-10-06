@@ -20,7 +20,7 @@ export interface StatsRecord {
   rateKc: number;
   surchargePct: number;
   date: string;
-  authorId: number;
+  workerId: number; // kdo pracoval (people.id)
   invoiceBatchId: number | null;
 }
 
@@ -87,7 +87,7 @@ export function computeOrderStats(input: OrderStatsInput): OrderStats {
     byDay.set(r.date, (byDay.get(r.date) ?? 0) + a);
     if (r.unit === 'hour') {
       hours += r.quantity;
-      byPerson.set(r.authorId, (byPerson.get(r.authorId) ?? 0) + r.quantity);
+      byPerson.set(r.workerId, (byPerson.get(r.workerId) ?? 0) + r.quantity);
     }
     if (r.invoiceBatchId === null) unbilledRates += a;
   }

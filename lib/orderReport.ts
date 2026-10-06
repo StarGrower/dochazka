@@ -24,7 +24,7 @@ function period(d: OrderDetail): string {
   return from ? `${czDate(from)} – ${to ? czDate(to) : 'dosud'}` : '';
 }
 
-export function orderReportHtml(d: OrderDetail, kind: OrderReportKind, settings: AppSettings, client: Client | null): string {
+export function orderReportHtml(d: OrderDetail, kind: OrderReportKind, settings: AppSettings, client: Client | null, workerName: string | null = null): string {
   const s = d.stats;
   const me = [settings.profileName, settings.profileIco ? `IČO ${settings.profileIco}` : '', settings.profileDic ? `DIČ ${settings.profileDic}` : '', settings.profileAddress]
     .filter(Boolean)
@@ -39,7 +39,7 @@ export function orderReportHtml(d: OrderDetail, kind: OrderReportKind, settings:
 
   const parts: string[] = [
     `<div class="head">${LOGO_SVG}<div class="who">${me}</div></div>`,
-    `<h1>${esc(d.order.name)}</h1>`,
+    `<h1>${esc(d.order.name)}${workerName ? ` · ${esc(workerName)}` : ''}</h1>`,
     `<div class="meta">${them ? `<div><b>Odběratel</b><br/>${them}</div>` : ''}<div><b>Období</b><br/>${period(d)}</div></div>`,
     `<h2>${kind === 'client' ? 'Provedené práce' : 'K fakturaci'}</h2>`,
     `<table>${rows.join('')}<tr class="tot"><td>Celkem${fixed ? ' (pevná cena)' : ''}</td><td></td><td class="r">${formatKc(s.billableKc)}</td></tr></table>`,

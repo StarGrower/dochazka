@@ -64,6 +64,43 @@ enum DeviceExtras {
     }
   }
 
+  // Doplněk etapy 5 - místo práce bez mé přítomnosti: hledání adresy /
+  // obce / firmy (MapKit, zdarma). Výsledky blízko `near` (poslední poloha)
+  // první. Každý výsledek: name, subtitle, latitude, longitude.
+  static func searchPlaces(query: String, nearLatitude: Double, nearLongitude: Double, completion: @escaping (Result<[[String: Any]], Error>) -> Void) {
+    let request = MKLocalSearch.Request()
+    request.naturalLanguageQuery = query
+    request.resultTypes = [.address, .pointOfInterest]
+    if nearLatitude != 0 || nearLongitude != 0 {
+      request.region = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: nearLatitude, longitude: nearLongitude),
+        latitudinalMeters: 100_000,
+        longitudinalMeters: 100_000
+      )
+    }
+    MKLocalSearch(request: request).start { response, error in
+      if let items = response?.mapItems {
+        let results: [[String: Any]] = items.prefix(15).map { item -> [String: Any] in
+          let p = item.placemark
+          let subtitle = [p.thoroughfare, p.subThoroughfare, p.locality].compactMap { $0 }.joined(separator: " ")
+          return [
+            "name": item.name ?? p.locality ?? "Místo",
+            "subtitle": subtitle,
+            "latitude": p.coordinate.latitude,
+            "longitude": p.coordinate.longitude,
+          ]
+        }
+        completion(.success(results))
+        return
+      }
+      if let error = error as? MKError, error.code == .placemarkNotFound {
+        completion(.success([]))
+        return
+      }
+      completion(.failure(error ?? (NativeError("Hledání se nepovedlo.") as Error)))
+    }
+  }
+
   // Název připojeného Bluetooth / CarPlay zvukového výstupu, "" = žádný.
   static func bluetoothAudioRoute() -> String {
     let carTypes: [AVAudioSession.Port] = [.bluetoothA2DP, .bluetoothHFP, .bluetoothLE, .carAudio]

@@ -22,12 +22,13 @@ import {
   deleteInvoiceBatch,
   getOrderDetail,
   listClients,
+  listPeople,
   setInvoiceBatchPaid,
   type OrderDetail,
 } from '@/lib/orders';
 import { BUDGET_WARN_PCT } from '@/lib/orderStats';
 import { safeFileName, shareBytes, sharePdfFromHtml, XLSX_MIME } from '@/lib/shareFile';
-import type { ExpenseCategory } from '@/lib/types';
+import type { ExpenseCategory, Person } from '@/lib/types';
 import { colors, fonts, fs, MIN_TOUCH, radii } from '@/theme';
 
 const czDate = (iso: string | null) => (iso ? `${Number(iso.slice(8, 10))}. ${Number(iso.slice(5, 7))}.` : '');
@@ -43,10 +44,13 @@ export default function OrderDetailScreen() {
   const [invoiceNote, setInvoiceNote] = useState('');
   const [exportOpen, setExportOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [workerFilter, setWorkerFilter] = useState<number | null>(null);
 
   const load = useCallback(async () => {
-    setDetail(await getOrderDetail(orderId));
-  }, [orderId]);
+    setDetail(await getOrderDetail(orderId, workerFilter));
+    setPeople(await listPeople());
+  }, [orderId, workerFilter]);
 
   // useCallback je NUTNÝ - bez něj se `load` spustí po každém překreslení (oprava 2).
   useFocusEffect(
@@ -67,6 +71,9 @@ export default function OrderDetailScreen() {
   const subtitle = [order.clientName, from ? `${czDate(from)} – ${order.dateTo ? czDate(order.dateTo) : 'dosud'}` : null].filter(Boolean).join(' · ');
   const budget = order.budgetKc;
   const warn = stats.budgetPct !== null && stats.budgetPct >= BUDGET_WARN_PCT;
+  // Pevná cena se fakturuje za celou zakázku, ne po pracovnících.
+  const invoiceBlocked = workerFilter !== null && order.priceMode === 'fixed';
+  const workerName = workerFilter !== null ? people.find((p) => p.id === workerFilter)?.name : null;
 
   const saveExpense = async () => {
     const amountKc = Number(expense.amount.replace(',', '.').replace(/\s/g, ''));
@@ -83,7 +90,7 @@ export default function OrderDetailScreen() {
   const confirmInvoice = async () => {
     setBusy(true);
     try {
-      await createInvoiceBatch(order, stats.unbilledKc, invoiceNote.trim());
+      await createInvoiceBatch(order, stats.unbilledKc, invoiceNote.trim(), workerFilter);
       setInvoiceOpen(false);
       setInvoiceNote('');
       await load();
@@ -100,12 +107,12 @@ export default function OrderDetailScreen() {
     setExportOpen(false);
     setBusy(true);
     try {
-      const fresh = (await getOrderDetail(order.id)) ?? detail;
+      const fresh = (await getOrderDetail(order.id, workerFilter)) ?? detail;
       const base = `Zakazka-${safeFileName(order.name)}-${kind === 'client' ? 'pro-odberatele' : 'interni'}`;
       if (format === 'pdf') {
         const [settings, clients] = await Promise.all([getSettings(), listClients()]);
         const client = clients.find((c) => c.id === order.clientId) ?? null;
-        await sharePdfFromHtml(orderReportHtml(fresh, kind, settings, client), base, 'Odeslat přehled zakázky');
+        await sharePdfFromHtml(orderReportHtml(fresh, kind, settings, client, workerName ?? null), base, 'Odeslat přehled zakázky');
       } else {
         await shareBytes(orderReportXlsx(fresh, kind), `${base}.xlsx`, XLSX_MIME, 'Odeslat přehled zakázky');
       }
@@ -130,6 +137,16 @@ export default function OrderDetailScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.sc}>
+        {people.length > 1 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.workerRow}>
+            {[{ id: null as number | null, name: 'Všichni' }, ...people].map((p) => (
+              <TouchableOpacity key={p.id ?? 'all'} style={[styles.chip, workerFilter === p.id && styles.chipOn]} onPress={() => setWorkerFilter(p.id)}>
+                <Text style={[styles.chipText, workerFilter === p.id && styles.chipTextOn]}>{p.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        )}
+        {workerName && <Text style={styles.filterHint}>Jen práce: {workerName} (bez výdajů zakázky; přejezdy, kde řídil)</Text>}
         <View style={styles.hero}>
           <Text style={styles.hl}>NEVYFAKTUROVÁNO</Text>
           <Text style={styles.hv}>{formatKc(stats.unbilledKc)}</Text>
@@ -306,17 +323,23 @@ export default function OrderDetailScreen() {
       </ScrollView>
 
       <TouchableOpacity
-        style={[styles.cta, stats.unbilledKc < 0.5 && styles.ctaDisabled]}
-        disabled={stats.unbilledKc < 0.5 || busy}
+        style={[styles.cta, (stats.unbilledKc < 0.5 || invoiceBlocked) && styles.ctaDisabled]}
+        disabled={stats.unbilledKc < 0.5 || busy || invoiceBlocked}
         onPress={() => setInvoiceOpen(true)}
       >
-        {busy ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.ctaText}>PŘIPRAVIT PODKLAD K FAKTUŘE</Text>}
+        {busy ? (
+          <ActivityIndicator color={colors.onAccent} />
+        ) : (
+          <Text style={styles.ctaText}>{invoiceBlocked ? 'PEVNÁ CENA - PODKLAD ZA CELOU ZAKÁZKU' : workerName ? `PODKLAD K FAKTUŘE · ${workerName.toUpperCase()}` : 'PŘIPRAVIT PODKLAD K FAKTUŘE'}</Text>
+        )}
       </TouchableOpacity>
 
       <BottomSheetModal visible={invoiceOpen} onClose={() => setInvoiceOpen(false)}>
         <Text style={styles.modalTitle}>PODKLAD K FAKTUŘE</Text>
         <Text style={styles.hint}>
-          Všechno nevyfakturované od posledního podkladu se označí jako vyfakturované - nic se nevyúčtuje dvakrát. Podklad jde zrušit.
+          {workerName
+            ? `Nevyfakturovaná práce pracovníka ${workerName} (a přejezdy, kde řídil) se označí jako vyfakturovaná. Výdaje zakázky zůstanou pro podklad bez filtru.`
+            : 'Všechno nevyfakturované od posledního podkladu se označí jako vyfakturované - nic se nevyúčtuje dvakrát. Podklad jde zrušit.'}
         </Text>
         <Text style={styles.modalBig}>{formatKc(stats.unbilledKc)}</Text>
         <TextInput
@@ -429,6 +452,8 @@ const styles = StyleSheet.create({
   hint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), lineHeight: fs(17) },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: radii.card, paddingHorizontal: 12, minHeight: 48, color: colors.text, fontFamily: fonts.body, fontSize: fs(16), backgroundColor: colors.background, marginTop: 8 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  workerRow: { gap: 8 },
+  filterHint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12) },
   chip: { minHeight: MIN_TOUCH, paddingHorizontal: 12, borderRadius: radii.card, borderWidth: 1, borderColor: colors.border, justifyContent: 'center' },
   chipOn: { backgroundColor: colors.accent, borderColor: colors.accent },
   chipText: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(14) },

@@ -5,7 +5,7 @@
 // používat stejný `applyRounding`).
 
 import { holidayName, isWeekend, isWorkday } from './holidays';
-import type { AppSettings, DayWorkRecord, RateUnit, WorkCategory } from './types';
+import type { AppSettings, DayWorkRecord, Person, RateUnit, WorkCategory } from './types';
 
 // Výchozí množství pro NOVOU hodinovou položku (zadání "výchozí délka
 // pracovního dne" + "automaticky odečítat přestávku"). 0 = proměnná
@@ -62,13 +62,25 @@ export function surchargePctFor(date: string, category: WorkCategory, settings: 
 }
 
 // Sazba + příplatek, které se uloží k položce v okamžiku zápisu (C1/C2).
+//
+// NETRIVIÁLNÍ ROZHODNUTÍ (doplněk etapy 5) - pracovník:
+// - "nefakturovat" -> 0 Kč (jen evidence hodin v Lidé a výkazu);
+// - výchozí sazba pracovníka (h / den) nahradí sazbu jen u PRÁCE; u stroje
+//   se fakturuje sazba stroje, ať ho řídí kdokoli; km vždy podle vozidla.
 export function priceForRecord(
   date: string,
   category: WorkCategory,
   unit: RateUnit,
-  settings: AppSettings
+  settings: AppSettings,
+  worker: Pick<Person, 'rateHourKc' | 'rateDayKc' | 'billable'> | null = null
 ): { rateKc: number; surchargePct: number } {
-  return { rateKc: category.rates[unit], surchargePct: surchargePctFor(date, category, settings) };
+  if (worker && !worker.billable) return { rateKc: 0, surchargePct: 0 };
+  let rateKc = category.rates[unit];
+  if (worker && category.kind !== 'machine') {
+    if (unit === 'hour' && worker.rateHourKc !== null) rateKc = worker.rateHourKc;
+    if (unit === 'day' && worker.rateDayKc !== null) rateKc = worker.rateDayKc;
+  }
+  return { rateKc, surchargePct: surchargePctFor(date, category, settings) };
 }
 
 export function recordAmountKc(record: Pick<DayWorkRecord, 'quantity' | 'rateKc' | 'surchargePct'>): number {

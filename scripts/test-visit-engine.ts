@@ -14,7 +14,7 @@ import { consumptionSegments, estimateCounter, learnRatio, parseCounterText, par
 import { computeOrderStats } from '../lib/orderStats';
 import { proposeStayRecord } from '../lib/stayProposal';
 import { DEFAULT_SETTINGS, type WorkCategory } from '../lib/types';
-import { applyRounding } from '../lib/workCalc';
+import { applyRounding, priceForRecord } from '../lib/workCalc';
 import { acceptRoadDistance, computeGapTrips, filterRoutePoints, matchTrips, planRoadSegments, tripKm, type PlanVisit } from '../lib/tripPlan';
 import { computeVisits, type EngineEvent, type EnginePlace, type EngineVisit } from '../lib/visitEngine';
 
@@ -211,7 +211,7 @@ const tests: Array<[string, () => void]> = [
   }],
   // --- etapa 5: zakázky ---
   ['zakázka: k fakturaci po strojích a km, nevyfakturováno, výsledek a Kč/h', () => {
-    const rec = (name: string, id: number, q: number, rate: number, batch: number | null, pct = 0) => ({ categoryId: id, categoryName: name, color: '#fff', unit: 'hour' as const, quantity: q, rateKc: rate, surchargePct: pct, date: '2026-10-05', authorId: 1, invoiceBatchId: batch });
+    const rec = (name: string, id: number, q: number, rate: number, batch: number | null, pct = 0) => ({ categoryId: id, categoryName: name, color: '#fff', unit: 'hour' as const, quantity: q, rateKc: rate, surchargePct: pct, date: '2026-10-05', workerId: 1, invoiceBatchId: batch });
     const stats = computeOrderStats({
       priceMode: 'budget',
       fixedPriceKc: null,
@@ -365,6 +365,24 @@ const tests: Array<[string, () => void]> = [
     assert.equal(Math.round(sum.businessPct ?? 0), 83);
     assert.equal(sum.allowanceKc, 250);
     assert.equal(logbookSummary([], 0).allowanceKc, null);
+  }],
+  ['pracovník: sazba pracovníka jen u práce, stroj sazbou stroje, nefakturovaný 0 Kč', () => {
+    const base = { rates: { hour: 900, day: 7000, km: 12 }, defaultUnit: 'hour' as const, weekendPct: null, holidayPct: null, sortOrder: 1, isDeleted: false, color: '#F2B705' };
+    const bagr: WorkCategory = { ...base, id: 1, name: 'Bagr', kind: 'machine' };
+    const prace: WorkCategory = { ...base, id: 2, name: 'Ruční práce', rates: { hour: 400, day: 3200, km: 0 }, kind: 'labor' };
+    const settings = { ...DEFAULT_SETTINGS, weekendSurchargePct: 25 };
+    const kolega = { rateHourKc: 350, rateDayKc: null, billable: true };
+    const workday = '2026-10-06';
+    // bez pracovníka / já bez sazby -> sazba práce
+    assert.equal(priceForRecord(workday, prace, 'hour', settings).rateKc, 400);
+    assert.equal(priceForRecord(workday, prace, 'hour', settings, { rateHourKc: null, rateDayKc: null, billable: true }).rateKc, 400);
+    // kolega se sazbou: práce jeho sazbou, den bez sazby -> sazba práce
+    assert.equal(priceForRecord(workday, prace, 'hour', settings, kolega).rateKc, 350);
+    assert.equal(priceForRecord(workday, prace, 'day', settings, kolega).rateKc, 3200);
+    // stroj vždy sazbou stroje, ať ho řídí kdokoli
+    assert.equal(priceForRecord(workday, bagr, 'hour', settings, kolega).rateKc, 900);
+    // jen evidence -> 0 Kč i bez příplatku
+    assert.deepEqual(priceForRecord('2026-10-10', bagr, 'hour', settings, { ...kolega, billable: false }), { rateKc: 0, surchargePct: 0 });
   }],
 ];
 

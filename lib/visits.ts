@@ -54,7 +54,7 @@ export async function rebuildVisits(fromMs: number | null): Promise<void> {
 
   const computed: DerivedVisit[] = computeVisits(
     events,
-    places.map((p) => ({ id: p.id, latitude: p.latitude, longitude: p.longitude, radiusM: p.radiusM })),
+    places.filter((p) => p.monitored).map((p) => ({ id: p.id, latitude: p.latitude, longitude: p.longitude, radiusM: p.radiusM })),
     { minStayMinutes: settings.minStayMinutes }
   ).map((v) => ({
     placeId: v.placeId,

@@ -179,6 +179,15 @@ public final class DochazkaNativeModule: Module {
       }
     }
 
+    AsyncFunction("searchPlaces") { (query: String, nearLatitude: Double, nearLongitude: Double, promise: Promise) in
+      DeviceExtras.searchPlaces(query: query, nearLatitude: nearLatitude, nearLongitude: nearLongitude) { result in
+        switch result {
+        case .success(let items): promise.resolve(items)
+        case .failure(let error): promise.reject(NativeError("\(error.localizedDescription)"))
+        }
+      }
+    }.runOnQueue(.main)
+
     AsyncFunction("nearbyGasStation") { (latitude: Double, longitude: Double, radius: Double, promise: Promise) in
       DeviceExtras.nearbyGasStation(latitude: latitude, longitude: longitude, radius: radius) { result in
         switch result {

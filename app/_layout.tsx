@@ -146,6 +146,7 @@ export default function RootLayout() {
             <Stack.Screen name="settings/stav" />
             <Stack.Screen name="settings/pripominky" />
             <Stack.Screen name="settings/vykaz" />
+            <Stack.Screen name="settings/pracovnici" />
             <Stack.Screen name="order/[id]" />
             <Stack.Screen name="order/edit" />
             <Stack.Screen name="machine/[id]" />

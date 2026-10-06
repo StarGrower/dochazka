@@ -15,7 +15,8 @@ import { distanceMeters } from './geo';
 import { holidayName, isWeekend } from './holidays';
 import { formatDurationHM } from './stayProposal';
 import { tripKm } from './tripPlan';
-import type { AppSettings, DayWorkRecordWithCategory, Place, VisitWithPlace } from './types';
+import { listPeople } from './orders';
+import { ME_ID, type AppSettings, type DayWorkRecordWithCategory, type Place, type VisitWithPlace } from './types';
 import { recordAmountKc } from './workCalc';
 
 export interface ReportOptions {
@@ -26,6 +27,9 @@ export interface ReportOptions {
   withMap: boolean;
   detailed: boolean; // pobyty s časy a přejezdy; jinak souhrn po dnech
   signatureSvgPath: string | null; // podpis prstem (SVG path ve viewBoxu 0 0 300 100)
+  // Doplněk etapy 5: jen jeden pracovník (null / chybí = všichni). Pobyty
+  // jsou jen moje, jízdy podle řidiče.
+  workerId?: number | null;
 }
 
 export interface ReportStay {
@@ -64,6 +68,9 @@ export interface ReportData {
   totals: { hour: number; day: number; recordKm: number; tripKm: number; amountKc: number };
   // Rozpis po strojích/pracích: název -> { jednotka -> množství, Kč }
   byCategory: { name: string; quantities: string; amountKc: number }[];
+  workerNames: Map<number, string>;
+  byWorker: { name: string; hours: number; days: number }[]; // jen když je víc pracovníků
+  placeNames: Map<number, string>;
 }
 
 const hm = (ms: number) => {
@@ -88,6 +95,9 @@ export async function collectReport(options: ReportOptions): Promise<ReportData>
   const placeById = new Map(places.map((p) => [p.id, p]));
   const privatePlaces = places.filter((p) => p.isPrivate || p.isHome);
   const inFilter = (placeId: number | null) => options.placeIds === null || (placeId !== null && options.placeIds.includes(placeId));
+  const workerId = options.workerId ?? null;
+  const people = await listPeople(true);
+  const workerNames = new Map(people.map((p) => [p.id, p.name]));
   const nameOf = (placeId: number | null) => {
     if (placeId === null) return 'neznámé místo';
     const p = placeById.get(placeId);
@@ -98,15 +108,17 @@ export async function collectReport(options: ReportOptions): Promise<ReportData>
   for (const date of datesBetween(options.from, options.to)) {
     const [allRecords, visits, trips, note] = await Promise.all([getDayRecords(date), getVisitsForDay(date), getTripsForDay(date), getDayNote(date)]);
     const timeline = buildDayTimeline(visits, date, Date.now());
-    const workStays = timeline.filter(
-      (i): i is TimelineStay<VisitWithPlace> => i.kind === 'stay' && !i.visit.placeIsPrivate && inFilter(i.visit.placeId)
-    );
+    const workStays =
+      workerId !== null && workerId !== ME_ID
+        ? []
+        : timeline.filter((i): i is TimelineStay<VisitWithPlace> => i.kind === 'stay' && !i.visit.placeIsPrivate && inFilter(i.visit.placeId));
     // S filtrem míst: zápisy u vybraných míst + zápisy bez místa ve dnech s pobytem na vybraném místě.
-    const records =
-      options.placeIds === null
-        ? allRecords
-        : allRecords.filter((r) => (r.placeId !== null ? inFilter(r.placeId) : workStays.length > 0));
-    const dayTrips = trips.filter((t) => !t.isPrivate && (options.placeIds === null || inFilter(t.toPlaceId) || inFilter(t.fromPlaceId)));
+    const records = allRecords
+      .filter((r) => workerId === null || r.workerId === workerId)
+      .filter((r) => options.placeIds === null || (r.placeId !== null ? inFilter(r.placeId) : workStays.length > 0));
+    const dayTrips = trips.filter(
+      (t) => !t.isPrivate && (workerId === null || t.driverId === workerId) && (options.placeIds === null || inFilter(t.toPlaceId) || inFilter(t.fromPlaceId))
+    );
     if (records.length === 0 && workStays.length === 0 && dayTrips.length === 0) continue;
 
     const points = await listRoutePointsForTrips(dayTrips.map((t) => t.id));
@@ -139,6 +151,7 @@ export async function collectReport(options: ReportOptions): Promise<ReportData>
 
   const totals = { hour: 0, day: 0, recordKm: 0, tripKm: 0, amountKc: 0 };
   const byName = new Map<string, { hour: number; day: number; km: number; amountKc: number }>();
+  const byWorkerMap = new Map<number, { hours: number; days: number }>();
   for (const d of days) {
     totals.tripKm += d.km;
     totals.amountKc += d.amountKc;
@@ -150,8 +163,15 @@ export async function collectReport(options: ReportOptions): Promise<ReportData>
       entry[r.unit === 'hour' ? 'hour' : r.unit === 'day' ? 'day' : 'km'] += r.quantity;
       entry.amountKc += recordAmountKc(r);
       byName.set(r.categoryName, entry);
+      const w = byWorkerMap.get(r.workerId) ?? { hours: 0, days: 0 };
+      if (r.unit === 'hour') w.hours += r.quantity;
+      if (r.unit === 'day') w.days += r.quantity;
+      byWorkerMap.set(r.workerId, w);
     }
   }
+  const byWorker =
+    byWorkerMap.size > 1 ? [...byWorkerMap.entries()].map(([id, w]) => ({ name: workerNames.get(id) ?? 'Neznámý', ...w })).sort((a, b) => b.hours - a.hours) : [];
+  const placeNames = new Map(places.filter((p) => !p.isPrivate && !p.isHome).map((p) => [p.id, p.name]));
   const byCategory = [...byName.entries()].map(([name, e]) => ({
     name,
     quantities: [
@@ -164,7 +184,7 @@ export async function collectReport(options: ReportOptions): Promise<ReportData>
     amountKc: e.amountKc,
   }));
 
-  return { options, days, totals, byCategory };
+  return { options, days, totals, byCategory, workerNames, byWorker, placeNames };
 }
 
 // --- PDF (HTML pro expo-print) ---
@@ -222,7 +242,8 @@ export async function reportHtml(data: ReportData, settings: AppSettings): Promi
 
   const parts: string[] = [];
   parts.push(`<div class="head">${LOGO_SVG}<div class="who">${profile}</div></div>`);
-  parts.push(`<h1>Výkaz práce ${fmtDate(options.from)} – ${fmtDate(options.to)}</h1>`);
+  const workerTitle = options.workerId != null ? ` · ${data.workerNames.get(options.workerId) ?? ''}` : '';
+  parts.push(`<h1>Výkaz práce ${fmtDate(options.from)} – ${fmtDate(options.to)}${esc(workerTitle)}</h1>`);
 
   // Souhrn
   const sumParts = [
@@ -237,12 +258,29 @@ export async function reportHtml(data: ReportData, settings: AppSettings): Promi
     for (const c of data.byCategory) parts.push(`<tr><td>${esc(c.name)}</td><td>${esc(c.quantities)}</td><td class="r">${kc(c.amountKc)}</td></tr>`);
     parts.push('</table>');
   }
+  if (data.byWorker.length > 0) {
+    parts.push('<table class="cat">');
+    for (const w of data.byWorker) {
+      const q = [w.hours > 0 ? formatQuantity(w.hours, 'hour') : null, w.days > 0 ? formatQuantity(w.days, 'day') : null].filter(Boolean).join(' + ');
+      parts.push(`<tr><td>${esc(w.name)}</td><td>${esc(q)}</td><td></td></tr>`);
+    }
+    parts.push('</table>');
+  }
 
   // Dny
   parts.push(`<table class="days"><tr><th>Den</th><th>Práce a stroje</th><th class="r">Km</th>${options.withPrices ? '<th class="r">Kč</th>' : ''}</tr>`);
   for (const d of days) {
     const items = d.records
-      .map((r) => `${esc(r.categoryName)} ${formatQuantity(r.quantity, r.unit)}${r.surchargePct > 0 ? ` (+${formatNumberCs(r.surchargePct)} %)` : ''}`)
+      .map((r) => {
+        const extra = [
+          r.workerId !== ME_ID ? data.workerNames.get(r.workerId) : null,
+          r.placeId !== null ? data.placeNames.get(r.placeId) : null,
+          r.timeFrom && r.timeTo ? `${r.timeFrom}–${r.timeTo}` : null,
+        ].filter(Boolean);
+        return `${esc(r.categoryName)} ${formatQuantity(r.quantity, r.unit)}${r.surchargePct > 0 ? ` (+${formatNumberCs(r.surchargePct)} %)` : ''}${
+          extra.length ? ` <span class="mut">· ${esc(extra.join(' · '))}</span>` : ''
+        }`;
+      })
       .join('<br/>');
     const dayName = `${esc(d.label)}${d.holiday ? `<br/><span class="mut">${esc(d.holiday)}</span>` : ''}`;
     parts.push(
@@ -293,16 +331,20 @@ export async function reportHtml(data: ReportData, settings: AppSettings): Promi
 // --- CSV a XLSX ---
 
 function rowsForExport(data: ReportData): string[][] {
-  const head = ['Datum', 'Den', 'Stroj / práce', 'Množství', 'Jednotka', 'Příplatek %', ...(data.options.withPrices ? ['Sazba Kč', 'Částka Kč'] : []), 'Km přejezdů'];
+  const head = ['Datum', 'Den', 'Stroj / práce', 'Pracovník', 'Místo', 'Od', 'Do', 'Množství', 'Jednotka', 'Příplatek %', ...(data.options.withPrices ? ['Sazba Kč', 'Částka Kč'] : []), 'Km přejezdů'];
   const unitName = { hour: 'h', day: 'den', km: 'km' } as const;
   const rows: string[][] = [head];
   for (const d of data.days) {
     const base = [d.date, d.label.split(' ')[0]];
-    if (d.records.length === 0) rows.push([...base, '', '', '', '', ...(data.options.withPrices ? ['', ''] : []), formatNumberCs(Math.round(d.km * 10) / 10)]);
+    if (d.records.length === 0) rows.push([...base, '', '', '', '', '', '', '', '', ...(data.options.withPrices ? ['', ''] : []), formatNumberCs(Math.round(d.km * 10) / 10)]);
     d.records.forEach((r, i) => {
       rows.push([
         ...base,
         r.categoryName,
+        data.workerNames.get(r.workerId) ?? '',
+        r.placeId !== null ? (data.placeNames.get(r.placeId) ?? '') : '',
+        r.timeFrom ?? '',
+        r.timeTo ?? '',
         formatNumberCs(r.quantity),
         unitName[r.unit],
         formatNumberCs(r.surchargePct),
