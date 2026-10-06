@@ -9,6 +9,7 @@ import { router, useFocusEffect } from 'expo-router';
 
 import BottomSheetModal from '@/components/BottomSheetModal';
 import { formatKc, formatNumberCs } from '@/lib/format';
+import { fuelReportHtml, fuelReportXlsx } from '@/lib/fuelReport';
 import {
   COUNTER_LABEL,
   fuelCostOf,
@@ -25,6 +26,7 @@ import {
   type FuelEntry,
   type MachineCard,
 } from '@/lib/machines';
+import { shareBytes, sharePdfFromHtml, XLSX_MIME } from '@/lib/shareFile';
 import { colors, fonts, fs, MIN_TOUCH, radii } from '@/theme';
 
 interface MachineSummary {
@@ -93,6 +95,25 @@ export default function StrojeScreen() {
 
   const reimburseKc = reimburse.reduce((s, e) => s + fuelCostOf(e), 0);
 
+  const exportFuel = () => {
+    const year = new Date().getFullYear();
+    const run = async (format: 'pdf' | 'xlsx') => {
+      try {
+        const entries = (await listFuelEntries()).filter((e) => new Date(e.fueledAt).getFullYear() === year);
+        const machines = await listMachines();
+        if (format === 'pdf') await sharePdfFromHtml(fuelReportHtml(year, entries, machines), `Tankovani-${year}`, 'Přehled tankování');
+        else await shareBytes(fuelReportXlsx(entries, machines), `Tankovani-${year}.xlsx`, XLSX_MIME, 'Přehled tankování');
+      } catch (err) {
+        Alert.alert('Export se nepovedl', err instanceof Error ? err.message : String(err));
+      }
+    };
+    Alert.alert(`Přehled tankování ${year}`, undefined, [
+      { text: 'Zrušit', style: 'cancel' },
+      { text: 'PDF', onPress: () => run('pdf') },
+      { text: 'Excel', onPress: () => run('xlsx') },
+    ]);
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.top}>
@@ -159,6 +180,11 @@ export default function StrojeScreen() {
             </View>
           </TouchableOpacity>
         ))}
+        {items !== null && items.length > 0 && (
+          <TouchableOpacity style={styles.exportLink} onPress={exportFuel}>
+            <Text style={styles.exportText}>Přehled tankování {new Date().getFullYear()} (PDF / Excel)</Text>
+          </TouchableOpacity>
+        )}
       </ScrollView>
 
       <BottomSheetModal visible={reimburseOpen} onClose={() => setReimburseOpen(false)}>
@@ -201,6 +227,8 @@ export default function StrojeScreen() {
 }
 
 const styles = StyleSheet.create({
+  exportLink: { minHeight: MIN_TOUCH, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+  exportText: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: fs(13) },
   container: { flex: 1, backgroundColor: colors.background },
   top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 22, paddingHorizontal: 16, paddingBottom: 12 },
   h1: { color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(28), letterSpacing: 0.84 },
