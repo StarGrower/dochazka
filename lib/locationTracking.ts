@@ -25,6 +25,7 @@ import {
 import { distanceMeters } from './geo';
 import { runDailyBackupIfDue } from './backup';
 import { evaluateHealthNotifications } from './health';
+import { evaluateServiceNotifications } from './machines';
 import { evaluateReminders, initReminders, processNotificationResponses } from './reminders';
 import { evaluateTripSession, stopTripTrackingIfRunning } from './tripTracking';
 import { rebuildVisits, runExclusive } from './visits';
@@ -240,7 +241,10 @@ async function ingest(items: IncomingEvent[]): Promise<void> {
 
   if (earliestMs !== null) await rebuildVisits(earliestMs);
   // Etapa 3: odjezd/příjezd -> zapnout/vypnout GPS jízdy.
-  if (newest) await evaluateTripSession(TRIGGER_LABELS[newest.kind]);
+  if (newest) {
+    const movement = newest.kind === 'significant' || newest.kind === 'geofence_exit' || newest.kind === 'visit_departure';
+    await evaluateTripSession(TRIGGER_LABELS[newest.kind], movement);
+  }
   // Etapa 4: připomenutí zápisu podle nového stavu pobytů.
   if (earliestMs !== null) await evaluateReminders().catch(() => {});
 }
@@ -473,4 +477,5 @@ export async function initLocationTracking(): Promise<void> {
   await runExclusive(() => evaluateReminders()).catch(() => {});
   await runDailyBackupIfDue(AppState.currentState === 'background' ? 'probuzení na pozadí' : 'start appky');
   await evaluateHealthNotifications().catch(() => {});
+  await evaluateServiceNotifications().catch(() => {});
 }

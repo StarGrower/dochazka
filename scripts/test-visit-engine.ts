@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 
 import { backupsToDelete, formatRecoveryKey, parseRecoveryKey } from '../lib/backupKey';
 import { buildDayTimeline } from '../lib/dayTimeline';
+import { consumptionSegments, estimateCounter, learnRatio, parseCounterText, parseReceiptText, serviceStatus, stockState, usagePerWorkday } from '../lib/machineCalc';
 import { computeOrderStats } from '../lib/orderStats';
 import { proposeStayRecord } from '../lib/stayProposal';
 import { DEFAULT_SETTINGS, type WorkCategory } from '../lib/types';
@@ -240,6 +241,72 @@ const tests: Array<[string, () => void]> = [
     assert.equal(stats.billableKc, 50000);
     assert.equal(stats.unbilledKc, 30000);
     assert.equal(stats.budgetPct, null);
+  }],
+  ['stroj: poměr Mth/zapsané hodiny z kotev a odhad počitadla', () => {
+    const D = 24 * 3600 * 1000;
+    const t0 = Date.UTC(2026, 9, 1, 12);
+    const samples = [1, 2, 3, 4, 5, 6].map((d) => ({ atMs: t0 + d * D, amount: 8 }));
+    // 1.-4. den: 32 h zapsáno, Mth +28 -> poměr 0,875
+    const anchors = [{ atMs: t0, value: 1000 }, { atMs: t0 + 4 * D + 1000, value: 1028 }];
+    assert.equal(learnRatio(anchors, samples), 0.875);
+    const est = estimateCounter(anchors, samples, t0 + 6 * D + 1000);
+    assert.ok(est);
+    assert.equal(est.sinceAnchor, 16);
+    assert.equal(est.value, 1028 + 16 * 0.875);
+    // chybná kotva (poměr 10) se omezí na 3
+    assert.equal(learnRatio([{ atMs: t0, value: 0 }, { atMs: t0 + 1.5 * D, value: 80 }], samples), 3);
+    // bez kotev není odhad, s jednou kotvou poměr 1
+    assert.equal(estimateCounter([], samples, t0), null);
+    assert.equal(estimateCounter([anchors[0]], samples, t0 + 2 * D + 1)?.value, 1016);
+    assert.equal(usagePerWorkday(samples, t0 + 6 * D + 1, 1), 8);
+  }],
+  ['stroj: servis - co nastane dřív (Mth / čas) a prahy upozornění', () => {
+    const now = Date.parse('2026-10-06T12:00:00');
+    const base = { intervalValue: 250, intervalDays: 365, warnFirst: 50, warnSecond: 20, warnDaysFirst: 30, warnDaysSecond: 7, lastDoneValue: 1000, lastDoneDate: '2026-06-01' };
+    const ok = serviceStatus(base, 1100, now, 7);
+    assert.equal(ok.level, 'ok');
+    assert.equal(ok.remainingValue, 150);
+    assert.equal(ok.estimatedWorkdays, 21);
+    assert.equal(serviceStatus(base, 1210, now, 7).threshold, 'first');
+    assert.equal(serviceStatus(base, 1235, now, 7).threshold, 'second');
+    assert.equal(serviceStatus(base, 1251, now, 7).level, 'overdue');
+    // čas: rok od 9. 10. 2025 -> za 3 dny -> druhý práh
+    const byDate = serviceStatus({ ...base, lastDoneDate: '2025-10-09' }, 1100, now, 7);
+    assert.equal(byDate.remainingDays, 3);
+    assert.equal(byDate.threshold, 'second');
+    assert.equal(serviceStatus({ ...base, intervalDays: null }, null, now, 0).level, 'unknown');
+  }],
+  ['stroj: spotřeba plná-plná se skokem +20 %', () => {
+    const seg = consumptionSegments([
+      { atMs: 1, liters: 80, fullTank: true, counter: 1000 },
+      { atMs: 2, liters: 30, fullTank: false, counter: null },
+      { atMs: 3, liters: 50, fullTank: true, counter: 1010 }, // 80 l / 10 Mth
+      { atMs: 4, liters: 100, fullTank: true, counter: 1020 }, // 10 l/Mth -> skok
+    ]);
+    assert.equal(seg.length, 2);
+    assert.equal(seg[0].liters, 80);
+    assert.equal(seg[0].perUnit, 8);
+    assert.equal(seg[0].jump, false);
+    assert.equal(seg[1].jump, true);
+  }],
+  ['stroj: zásoba nafty - vážený průměr a výdej', () => {
+    const st = stockState([
+      { atMs: 1, kind: 'purchase', liters: 1000, priceTotalKc: 30000 },
+      { atMs: 2, kind: 'issue', liters: 400, priceTotalKc: null },
+      { atMs: 3, kind: 'purchase', liters: 400, priceTotalKc: 14000 },
+    ]);
+    assert.equal(st.liters, 1000);
+    assert.equal(Math.round(st.avgPricePerL * 100) / 100, 32);
+  }],
+  ['OCR: počitadlo a účtenka (jen návrh)', () => {
+    assert.equal(parseCounterText(['12:45', 'MTH', '4 512,3']), 4512.3);
+    assert.equal(parseCounterText(['06.10.2026', '00123456']), 123456);
+    assert.equal(parseCounterText(['bez cisel']), null);
+    const r = parseReceiptText(['Cerpaci stanice X', 'Nafta 52,34 l', '36,90 Kč/l', 'CELKEM 1 931,35 Kč', '6. 10. 2026 14:02']);
+    assert.equal(r.liters, 52.34);
+    assert.equal(r.pricePerL, 36.9);
+    assert.equal(r.totalKc, 1931.35);
+    assert.equal(r.date, '2026-10-06');
   }],
 ];
 

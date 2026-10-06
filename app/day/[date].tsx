@@ -66,6 +66,7 @@ import { geocodeKey, nearLocalityLabel, resolveLocalities } from '@/lib/geocode'
 import { holidayName, isWeekend } from '@/lib/holidays';
 import { tripKm } from '@/lib/tripPlan';
 import type { AppSettings, DayWorkRecordWithCategory, RateUnit, RoutePoint, Trip, VisitWithPlace, WorkCategory } from '@/lib/types';
+import { defectWarningFor } from '@/lib/machines';
 import { assignOrdersAuto, listOrders, setRecordOrder, setTripOrder } from '@/lib/orders';
 import { evaluateRemindersSafe, proposalForStay, workStaysForDate } from '@/lib/reminders';
 import { formatDurationHM } from '@/lib/stayProposal';
@@ -240,9 +241,17 @@ export default function DayDetailScreen() {
 
   // --- položky práce ---
 
+  // Etapa 6: první zápis dne pro stroj s nevyřešenou závadou -> upozornit.
+  const warnDefects = async (categoryIds: number[]) => {
+    if (!date) return;
+    const text = await defectWarningFor(date, categoryIds).catch(() => null);
+    if (text) Alert.alert('Nevyřešená závada', text);
+  };
+
   const handleAdd = async (category: WorkCategory, unit: RateUnit, quantity: number) => {
     if (!date || !settings) return;
     const suggested = sheetMode?.kind === 'add' && sheetMode.suggestedHours !== null && unit === 'hour';
+    await warnDefects([category.id]);
     await addDayRecord({
       date,
       categoryId: category.id,
@@ -263,6 +272,7 @@ export default function DayDetailScreen() {
       await load();
       return;
     }
+    await warnDefects(items.map((i) => i.category.id));
     for (const item of items) {
       await addDayRecord({
         date,
@@ -535,6 +545,7 @@ export default function DayDetailScreen() {
 
   const handleSaveStay = async (target: StaySheetTarget, rows: StayRow[], lockFirst: boolean) => {
     if (!date || !settings) return;
+    await warnDefects(rows.map((r) => r.categoryId));
     for (const row of rows) {
       const category = categoryById.get(row.categoryId);
       if (!category) continue;

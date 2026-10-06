@@ -15,6 +15,9 @@ import {
   processContinuousLocations,
 } from './locationTracking';
 import { processTripLocations, TRIP_TASK_NAME } from './tripTracking';
+// Etapa 6: registrace paliva do nákladů zakázek a upozornění "Tankoval
+// jsi?" při stání u pumpy - musí platit i při probuzení na pozadí.
+import './machines';
 
 // kCLErrorLocationUnknown (kCLErrorDomain Code=0) je dočasný stav - iOS
 // polohu zatím nezná a zkusí to znovu. Není to chyba, do deníku nepatří.

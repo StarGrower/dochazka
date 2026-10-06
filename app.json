@@ -47,6 +47,14 @@
         }
       ],
       "expo-maps",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Docházka používá fotky počitadel, účtenek a závad strojů - text se z nich rozpozná přímo v telefonu.",
+          "cameraPermission": "Docházka fotí počitadlo motohodin/km, účtenky z tankování a závady strojů - text se rozpozná přímo v telefonu.",
+          "microphonePermission": false
+        }
+      ],
       "expo-sharing"
     ],
     "experiments": {

@@ -56,7 +56,10 @@ export interface WorkStay {
 }
 
 interface StayPayload {
-  kind: 'stay' | 'day';
+  kind: 'stay' | 'day' | 'fuel' | 'machine' | 'health';
+  machineId?: number;
+  at?: string;
+  station?: string;
   date: string;
   placeId?: number | null;
   latitude?: number | null;
@@ -327,6 +330,12 @@ async function handleResponse(r: NotificationResponse): Promise<string | null> {
     payload = null;
   }
   if (!payload || !payload.date) return null;
+  // Etapa 6: "Tankoval jsi?" a servis stroje.
+  if (payload.kind === 'fuel') {
+    if (r.actionId !== 'fuel' && r.actionId !== 'open') return null;
+    return `/fuel/edit?lat=${payload.latitude ?? ''}&lon=${payload.longitude ?? ''}&at=${encodeURIComponent(payload.at ?? '')}`;
+  }
+  if (payload.kind === 'machine' && payload.machineId) return r.actionId === 'open' ? `/machine/${payload.machineId}` : null;
   const { date } = payload;
 
   await addDebugLogEntry({

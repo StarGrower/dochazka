@@ -12,7 +12,7 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Test v terénu proběhl 2.-4. 10. 2026.**
 **Oprava 2 (po terénním testu etapy 2) - HOTOVO (skupiny A-F), build OVĚŘEN (run 37210061504, 13m21s, všechny kroky zelené vč. Swift modulu, `.ipa` ~15 MB). Čeká na test v telefonu - viz "Co otestovat v telefonu (oprava 2)".**
 
-**Etapy 5-7 (zakázky, stroje, kniha jízd) - ROZPRACOVÁNO jako jeden build (commit po každé etapě), viz sekce "Etapy 5-7" níž. Etapa 5 HOTOVO.**
+**Etapy 5-7 (zakázky, stroje, kniha jízd) - ROZPRACOVÁNO jako jeden build (commit po každé etapě), viz sekce "Etapy 5-7" níž. Etapa 5 HOTOVO, etapa 6 HOTOVO.**
 **Etapa 4 (záloha, stav záznamu, připomenutí, výkaz pro šéfa) - HOTOVO, build OVĚŘEN (run 37242592887, 16m52s, vše zelené vč. Swift modulu dochazka-native, `.ipa` ~15,8 MB). Čeká na test - viz "Etapa 4 - co testovat".**
 **Plán etap 4-8: `PLAN_DALSI_ETAPY.md` (jen lokálně, v `.gitignore`), grafické předlohy v `private/` (predloha-pripominka.html, predloha-zakazky.html).**
 **Etapa 3 (přejezdy, trasy, km, mapa) + ikona, logo a úvodní animace - HOTOVO, build OVĚŘEN (run 37218589500, 15m34s, vše zelené vč. react-native-maps a react-native-svg, `.ipa` ~15 MB). Čeká na test v terénu - viz "Etapa 3 - co testovat v terénu".**
@@ -78,6 +78,45 @@ opakovaně bez chyb, uuid u všech řádků, trigger u nového řádku.
 - **Export** (`lib/orderReport.ts`): pro odběratele (bez nákladů, logo,
   Moje údaje, odběratel) a interní (náklady, výsledek, lidé, výdaje, dny);
   PDF + XLSX (`xlsxFromSheets` sdílený s výkazem), `lib/shareFile.ts`.
+
+### Etapa 6 - stroje (HOTOVO)
+
+- **Záložka Stroje** (`app/(tabs)/stroje.tsx`): K PROPLACENÍ (vlastní
+  karta / hotově, označit proplacené), ZÁSOBA NAFTY, + TANKOVAT, KNIHA
+  JÍZD, karty strojů se stavem počitadla, nejbližším servisem a závadami.
+- **Karta stroje** (`app/machine/[id].tsx`, `app/machine/edit.tsx`):
+  výrobce, model, výr. číslo, rok, SPZ, počitadlo Mth / km / žádné,
+  počáteční stav, Bluetooth vozidla (pro etapu 7). Nový stroj ze šablony
+  (Bagr, Nákladní automobil, Traktor, Osobní automobil) nebo bez;
+  "Uložit jako šablonu" z vlastního plánu. Sazby dál v Strojích a
+  kategoriích (stroj = řádek `work_categories`).
+- **NETRIVIÁLNÍ ROZHODNUTÍ - odhad počitadla** (`lib/machineCalc.ts`,
+  čisté a testované): poslední kotva (ruční stav, fotka, tankování) +
+  zapsané hodiny práce (u vozidel km přejezdů) od kotvy × naučený poměr
+  = medián posledních 5 úseků mezi kotvami, omezený 0,3-3 (chybná kotva
+  nerozhodí odhad); bez dvou kotev poměr 1.
+- **Servis**: položky s intervalem v Mth/km a/nebo dnech, platí co
+  nastane dřív; upozornění 50 a 20 Mth (u km 1000 a 400 km) a 30 a 7 dní
+  předem, místní upozornění jednou na práh. Zbývá ≈ X pracovních dní
+  podle průměru za 60 dní. "Provedeno" = servisní záznam (stav, co, materiál,
+  kdo), interval se vynuluje. Servisní kniha PDF bez cen.
+- **Závady**: popis, fotka, Jde pracovat / Opatrně / Stroj stojí;
+  vyřešit s poznámkou. Při prvním zápisu dne pro stroj s nevyřešenou
+  závadou se v Detailu dne ukáže upozornění.
+- **Tankování** (`app/fuel/edit.tsx`): stroj / kanystr, palivo, litry,
+  Kč (Kč/l dopočet), plná nádrž, stav počitadla (= kotva; fotka + OCR),
+  účtenka (fotka + OCR předvyplní litry, cenu, datum - vždy potvrzuje
+  uživatel), platba, zdroj pumpa / vlastní zásoba (za průměrnou cenu).
+  Spotřeba plná-plná (l/Mth, l/100 km), skok +20 % proti průměru je
+  červeně. **Zásoba nafty** (`app/fuel/stock.tsx`): vážený průměr nákupů.
+- **"Tankoval jsi?"**: když se jízda zastaví (5 min stání) do 80 m od
+  čerpací stanice (MapKit, offline cache / síť), přijde místní upozornění;
+  klepnutí otevře tankování s polohou a časem.
+- **Palivo do zakázky**: náklad paliva stroje = průměrná cena paliva ×
+  spotřeba × hodiny (km) stroje na zakázce (`setOrderFuelCostProvider`).
+- **Fotky** zmenšené na 1280 px JPEG v tabulce `photos` -> jsou v
+  šifrované záloze. OCR = Apple Vision v telefonu (bez sítě), jazyk en-US
+  (čísla čte spolehlivě; čeština ve Vision na starších iOS chybí).
 
 ## Etapa 4 - záloha, stav záznamu, připomenutí, výkaz pro šéfa
 

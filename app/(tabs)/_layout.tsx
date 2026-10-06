@@ -45,6 +45,15 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="stroje"
+        options={{
+          title: 'Stroje',
+          tabBarIcon: ({ color }) => (
+            <SymbolView name={{ ios: 'wrench.and.screwdriver', android: 'build', web: 'build' }} tintColor={color} size={26} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="nastaveni"
         options={{
           title: 'Nastavení',

@@ -62,6 +62,10 @@ declare class DochazkaNativeModule extends NativeModule<DochazkaNativeEvents> {
   mapSnapshot(routes: number[][][], stops: number[][], labels: string[], width: number, height: number): Promise<string>;
   // --- vzdálenost po silnici (metry, -1 = trasa nenalezena; chyba = bez sítě) ---
   roadDistance(fromLat: number, fromLon: number, toLat: number, toLon: number): Promise<number>;
+  // --- etapy 6 a 7 ---
+  recognizeText(base64Jpeg: string): Promise<string[]>; // Apple Vision, offline
+  nearbyGasStation(latitude: number, longitude: number, radiusM: number): Promise<string>; // '' = žádná
+  bluetoothAudioRoute(): string; // název Bluetooth/CarPlay výstupu, '' = žádný
   // --- místní upozornění ---
   requestNotificationPermission(): Promise<boolean>;
   getNotificationPermission(): Promise<'granted' | 'denied' | 'undetermined'>;

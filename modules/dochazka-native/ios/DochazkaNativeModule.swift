@@ -168,6 +168,30 @@ public final class DochazkaNativeModule: Module {
       }
     }.runOnQueue(.main)
 
+    // --- etapy 6 a 7: OCR, čerpací stanice, Bluetooth auto ---
+
+    AsyncFunction("recognizeText") { (base64: String, promise: Promise) in
+      DeviceExtras.recognizeText(base64: base64) { result in
+        switch result {
+        case .success(let lines): promise.resolve(lines)
+        case .failure(let error): promise.reject(NativeError("\(error.localizedDescription)"))
+        }
+      }
+    }
+
+    AsyncFunction("nearbyGasStation") { (latitude: Double, longitude: Double, radius: Double, promise: Promise) in
+      DeviceExtras.nearbyGasStation(latitude: latitude, longitude: longitude, radius: radius) { result in
+        switch result {
+        case .success(let name): promise.resolve(name)
+        case .failure(let error): promise.reject(NativeError("\(error.localizedDescription)"))
+        }
+      }
+    }.runOnQueue(.main)
+
+    Function("bluetoothAudioRoute") { () -> String in
+      DeviceExtras.bluetoothAudioRoute()
+    }
+
     // --- místní upozornění ---
 
     AsyncFunction("requestNotificationPermission") { (promise: Promise) in

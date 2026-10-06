@@ -49,6 +49,23 @@ const STATIONARY_RADIUS_M = 100;
 const MOVING_SPEED_MPS = 2; // ~7 km/h - pod tím se počítá jako stání
 const STORE_MAX_INTERVAL_MS = 60 * 1000;
 const KEY_TRIP_MOTION = 'trip_motion'; // JSON MotionState - přežije restart procesu
+// Sledování zastavené stáním (zácpa, obchod, pumpa) bez nového pobytu:
+// při další události pohybu se obnoví (jinak by zbytek cesty byl bez bodů).
+const KEY_TRIP_PAUSED = 'trip_paused'; // JSON PausedTrip
+const MAX_PAUSE_MS = 3 * 60 * 60 * 1000;
+
+interface PausedTrip {
+  departedAt: string;
+  at: string;
+  latitude: number;
+  longitude: number;
+}
+
+// Etapa 6: po zastavení stáním kontrola, jestli to nebyla čerpací stanice.
+let stationaryStopHandler: ((latitude: number, longitude: number, atMs: number) => Promise<void>) | null = null;
+export function setStationaryStopHandler(handler: typeof stationaryStopHandler): void {
+  stationaryStopHandler = handler;
+}
 
 interface MotionState {
   anchor: { latitude: number; longitude: number; t: number }; // poslední místo, kde se jelo
@@ -138,9 +155,13 @@ async function startSession(departedAt: string, reason: string, settings: AppSet
   });
 }
 
-async function stopSession(session: TripSession, reason: string): Promise<void> {
+async function stopSession(session: TripSession, reason: string, pausedAt?: { latitude: number; longitude: number; t: number }): Promise<void> {
   await Location.stopLocationUpdatesAsync(TRIP_TASK_NAME).catch(() => {});
   await setSession(null);
+  await setInternalValue(
+    KEY_TRIP_PAUSED,
+    pausedAt ? JSON.stringify({ departedAt: session.departedAt, at: new Date(pausedAt.t).toISOString(), latitude: pausedAt.latitude, longitude: pausedAt.longitude }) : ''
+  );
   await setInternalValue(KEY_TRIP_MOTION, '');
   motionMemo = null;
   await setInternalValue(KEY_TRIP_HANDLED_DEPARTURE, session.departedAt);
@@ -172,10 +193,31 @@ async function stopSession(session: TripSession, reason: string): Promise<void> 
 
 // Volat UVNITŘ runExclusive (po přepočtu pobytů, při startu appky, po
 // změně nastavení). `trigger` = co vyvolalo vyhodnocení (do deníku).
-export async function evaluateTripSession(trigger: string): Promise<void> {
+// `movement` - událost svědčí o pohybu (významná změna, výstup z
+// geofence, CLVisit odjezd) -> může obnovit sledování pozastavené stáním.
+export async function evaluateTripSession(trigger: string, movement = false): Promise<void> {
   const settings = await getSettings();
   const session = await getSession();
   const latest = await getLatestVisit();
+
+  if (!session) {
+    let paused: PausedTrip | null = null;
+    try {
+      paused = JSON.parse((await getInternalValue(KEY_TRIP_PAUSED)) || 'null') as PausedTrip | null;
+    } catch {
+      paused = null;
+    }
+    if (paused) {
+      const sameTrip = latest && latest.endAt !== null && latest.startAt <= paused.departedAt;
+      if (!sameTrip || Date.now() - Date.parse(paused.at) > MAX_PAUSE_MS || !isRouteTrackingActive(settings)) {
+        await setInternalValue(KEY_TRIP_PAUSED, ''); // přijel jsem / dávno / vypnuto
+      } else if (movement) {
+        await setInternalValue(KEY_TRIP_PAUSED, '');
+        await startSession(paused.departedAt, `pokračování jízdy po stání - ${trigger}`, settings);
+        return;
+      }
+    }
+  }
 
   if (session) {
     if (!isRouteTrackingActive(settings)) {
@@ -249,7 +291,9 @@ export function processTripLocations(locations: Location.LocationObject[]): Prom
     motionMemo = { sessionStartedAt: session.startedAt, motion };
     // Stání ~5 min = cíl (CLVisit příjezd může přijít až za desítky minut).
     if (Date.now() - motion.anchor.t >= STATIONARY_MS) {
-      await stopSession(session, 'stání 5 min');
+      const anchor = motion.anchor;
+      await stopSession(session, 'stání 5 min', anchor);
+      await stationaryStopHandler?.(anchor.latitude, anchor.longitude, anchor.t).catch(() => {});
       return;
     }
     if (stored) await setInternalValue(KEY_TRIP_MOTION, JSON.stringify(motion));

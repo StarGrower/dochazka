@@ -148,6 +148,11 @@ export default function RootLayout() {
             <Stack.Screen name="settings/vykaz" />
             <Stack.Screen name="order/[id]" />
             <Stack.Screen name="order/edit" />
+            <Stack.Screen name="machine/[id]" />
+            <Stack.Screen name="machine/edit" />
+            <Stack.Screen name="fuel/edit" />
+            <Stack.Screen name="fuel/stock" />
+            <Stack.Screen name="logbook" />
           </Stack>
           {/* Globální "Hotovo" lišta nad číselnou klávesnicí (ČÁST 1 oprava) -
               mountuje se JEDNOU tady, viz components/KeyboardDoneAccessory.tsx. */}
