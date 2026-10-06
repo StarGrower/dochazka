@@ -1,7 +1,5 @@
-// Dolní lišta (vizuální směr "A · Stavba") - zatím jen 2 ze 4 záložek
-// ze zadání (Kalendář, Nastavení). "Místa" (etapa 2) a "Export" (etapa
-// 4) přibudou ve svých etapách - viz POZNAMKY.md, design pro ně je
-// zachycený, ať se při jejich stavbě nemusí vymýšlet znovu.
+// Dolní lišta (vizuální směr "A · Stavba"): Kalendář / Zakázky (etapa 5)
+// / Stroje (etapa 6) / Nastavení - podle předlohy zakázek.
 
 import { SymbolView } from 'expo-symbols';
 import { Tabs } from 'expo-router';
@@ -34,6 +32,15 @@ export default function TabLayout() {
               tintColor={color}
               size={26}
             />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="zakazky"
+        options={{
+          title: 'Zakázky',
+          tabBarIcon: ({ color }) => (
+            <SymbolView name={{ ios: 'briefcase', android: 'work', web: 'work' }} tintColor={color} size={26} />
           ),
         }}
       />

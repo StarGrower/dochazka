@@ -169,9 +169,9 @@ export async function collectReport(options: ReportOptions): Promise<ReportData>
 
 // --- PDF (HTML pro expo-print) ---
 
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+export const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-const LOGO_SVG = `<svg viewBox="0 0 400 100" width="200" height="50" xmlns="http://www.w3.org/2000/svg">
+export const LOGO_SVG = `<svg viewBox="0 0 400 100" width="200" height="50" xmlns="http://www.w3.org/2000/svg">
 <g transform="rotate(-12 30 50)"><rect x="12" y="20" width="10" height="60" rx="5" fill="#F2B705"/><path d="M23 22a28 28 0 0 1 0 56z" fill="#F2B705"/><path d="M29 46h13v8H29z" fill="#131311" opacity=".25"/></g>
 <circle cx="72" cy="52" r="25" fill="#131311" stroke="#131311" stroke-width="12"/><circle cx="72" cy="52" r="25" fill="none" stroke="#F2B705" stroke-width="10"/>
 <path d="M72 52V39" stroke="#F3F1EA" stroke-width="6" stroke-linecap="round"/><path d="M72 52h10" stroke="#F3F1EA" stroke-width="6" stroke-linecap="round"/>
@@ -349,10 +349,14 @@ function sheetXml(rows: string[][]): string {
 
 // Minimální skutečné XLSX (OOXML v ZIPu) - listy Dny a Přejezdy.
 export function reportXlsx(data: ReportData): Uint8Array {
-  const sheets = [
+  return xlsxFromSheets([
     { name: 'Dny', rows: rowsForExport(data) },
     { name: 'Přejezdy', rows: tripRows(data) },
-  ];
+  ]);
+}
+
+// Obecný zápis XLSX (sdílí výkaz pro šéfa a export zakázky).
+export function xlsxFromSheets(sheets: { name: string; rows: string[][] }[]): Uint8Array {
   const files: Record<string, Uint8Array> = {
     '[Content_Types].xml': strToU8(
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`

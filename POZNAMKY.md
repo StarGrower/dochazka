@@ -12,10 +12,72 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Test v terénu proběhl 2.-4. 10. 2026.**
 **Oprava 2 (po terénním testu etapy 2) - HOTOVO (skupiny A-F), build OVĚŘEN (run 37210061504, 13m21s, všechny kroky zelené vč. Swift modulu, `.ipa` ~15 MB). Čeká na test v telefonu - viz "Co otestovat v telefonu (oprava 2)".**
 
+**Etapy 5-7 (zakázky, stroje, kniha jízd) - ROZPRACOVÁNO jako jeden build (commit po každé etapě), viz sekce "Etapy 5-7" níž. Etapa 5 HOTOVO.**
 **Etapa 4 (záloha, stav záznamu, připomenutí, výkaz pro šéfa) - HOTOVO, build OVĚŘEN (run 37242592887, 16m52s, vše zelené vč. Swift modulu dochazka-native, `.ipa` ~15,8 MB). Čeká na test - viz "Etapa 4 - co testovat".**
 **Plán etap 4-8: `PLAN_DALSI_ETAPY.md` (jen lokálně, v `.gitignore`), grafické předlohy v `private/` (predloha-pripominka.html, predloha-zakazky.html).**
 **Etapa 3 (přejezdy, trasy, km, mapa) + ikona, logo a úvodní animace - HOTOVO, build OVĚŘEN (run 37218589500, 15m34s, vše zelené vč. react-native-maps a react-native-svg, `.ipa` ~15 MB). Čeká na test v terénu - viz "Etapa 3 - co testovat v terénu".**
 - Etapa 4 (export, záloha) - nezačato.
+
+## Etapy 5-7 - zakázky, stroje, kniha jízd (jeden build)
+
+### Společná migrace v5 (`user_version` 4 -> 5)
+
+Jedna migrace pro opravy po terénním testu etapy 3 (km po silnici) i
+etapy 5-7, jen přidává. Záloha `dochazka-zaloha-pred-etapami-5-7.db` +
+šifrovaná do složky.
+- **Příprava na etapu 8:** `uuid`, `updated_at`, `author_id` u položek,
+  přejezdů, pobytů, míst a strojů (uuid i u všech nových tabulek);
+  doplnění stávajícím řádkům, triggery pro nové řádky (uuid při vložení,
+  updated_at při změně). Tabulka `people` (id 1 = já, jméno z Mých údajů).
+- **Etapa 5:** `clients`, `orders`, `order_places`, `order_expenses`,
+  `invoice_batches`; `order_id` + `invoice_batch_id` u položek a přejezdů.
+- **Etapa 6:** karta stroje = nové sloupce `work_categories` (výrobce,
+  model, výr. číslo, rok, SPZ, počitadlo `counter_unit` mth/km/none +
+  počáteční stav, šablona, název Bluetooth auta); `machine_templates`
+  (4 vestavěné se servisním plánem), `counter_readings`, `service_items`,
+  `service_records` (bez cen), `defects`, `fuel_entries`,
+  `fuel_stock_moves`, `photos` (zmenšené JPEG přímo v DB - jsou tak v
+  šifrované záloze). Počitadlo u stávajících strojů: výchozí jednotka km =
+  km, jinak stroj = Mth, práce = jen datum.
+- **Etapa 7:** u přejezdů `purpose`, `driver_id`, `vehicle_source`,
+  `odo_km` (korekce podle tachometru), `edited_after_close`; tabulky
+  `logbook_gaps` (jiný řidič / nezaznamenáno) a `logbook_months`.
+Ověřeno lokálně (`private/migration-test.ts`): z v0/v2/v3 na v5,
+opakovaně bez chyb, uuid u všech řádků, trigger u nového řádku.
+
+### Etapa 5 - zakázky (HOTOVO)
+
+- **Záložka Zakázky** (`app/(tabs)/zakazky.tsx`) a **detail**
+  (`app/order/[id].tsx`) podle předlohy `private/predloha-zakazky.html`
+  (rozměry z HTML, písma/barvy z theme): souhrn NEVYFAKTUROVÁNO / ČEKÁ NA
+  PLATBU, filtry Vše / Běží / K fakturaci / Hotové + řazení, karty se
+  stavem (`components/OrderBadge.tsx`) a rozpočtem; detail s
+  NEVYFAKTUROVÁNO + rozpočet (upozornění od 90 %), K FAKTURACI po
+  strojích/pracích a km, NÁKLADY A VÝSLEDEK (palivo z etapy 6, výdaje,
+  Kč/h), LIDÉ, VÝDAJE (+ přidat, podržením smazat), PODKLADY K FAKTUŘE
+  (zaplaceno / zrušit), PO DNECH, Export, Upravit, PŘIPRAVIT PODKLAD.
+- **Nová/upravit** (`app/order/edit.tsx`): název, odběratel (vybrat /
+  nový s IČO, DIČ, adresou), místa, období, stav, cena podle ceníku /
+  pevná / rozpočet, poznámka.
+- **NETRIVIÁLNÍ ROZHODNUTÍ - přiřazení je uložené u záznamu**
+  (`order_id`; NULL = automatika, -1 = ručně bez zakázky):
+  `assignOrdersAuto` přiřadí nepřiřazené a nevyfakturované - zápis s
+  místem podle místa a období zakázky, zápis bez místa když byl v ten den
+  pobyt na místě právě jedné zakázky, přejezd podle místa příjezdu
+  (odjezdu). Spouští se při uložení zakázky, v Detailu dne a v seznamu.
+  Ruční přeřazení v úpravě položky i přejezdu (`components/OrderPicker.tsx`).
+- **Výpočty** `lib/orderStats.ts` (čisté, testované): sazby a příplatky
+  uložené u položek; km přejezdů × Kč/km vozidla (jen přejezdy, jejichž
+  km ještě nejsou v Práci a strojích); pevná cena = k fakturaci, rozpis
+  pro kontrolu; servis se do nákladů nepočítá; palivo dodá etapa 6
+  (`setOrderFuelCostProvider`).
+- **Podklad k faktuře** označí vše nevyfakturované (položky, přejezdy,
+  výdaje) `invoice_batch_id` - žádné dvojí účtování; zrušení podkladu
+  vrátí položky. Stav zakázky: dokončeno -> vyfakturováno (při podkladu)
+  -> zaplaceno (když jsou zaplacené všechny podklady).
+- **Export** (`lib/orderReport.ts`): pro odběratele (bez nákladů, logo,
+  Moje údaje, odběratel) a interní (náklady, výsledek, lidé, výdaje, dny);
+  PDF + XLSX (`xlsxFromSheets` sdílený s výkazem), `lib/shareFile.ts`.
 
 ## Etapa 4 - záloha, stav záznamu, připomenutí, výkaz pro šéfa
 

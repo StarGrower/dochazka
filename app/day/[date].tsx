@@ -66,6 +66,7 @@ import { geocodeKey, nearLocalityLabel, resolveLocalities } from '@/lib/geocode'
 import { holidayName, isWeekend } from '@/lib/holidays';
 import { tripKm } from '@/lib/tripPlan';
 import type { AppSettings, DayWorkRecordWithCategory, RateUnit, RoutePoint, Trip, VisitWithPlace, WorkCategory } from '@/lib/types';
+import { assignOrdersAuto, listOrders, setRecordOrder, setTripOrder } from '@/lib/orders';
 import { evaluateRemindersSafe, proposalForStay, workStaysForDate } from '@/lib/reminders';
 import { formatDurationHM } from '@/lib/stayProposal';
 import { refreshTrips } from '@/lib/visits';
@@ -144,9 +145,13 @@ export default function DayDetailScreen() {
   const [recordedPlaces, setRecordedPlaces] = useState<Set<number>>(new Set());
   const [staySheetTarget, setStaySheetTarget] = useState<StaySheetTarget | null>(null);
   const [stayParamDone, setStayParamDone] = useState(false);
+  const [orderOptions, setOrderOptions] = useState<{ id: number; name: string }[]>([]);
 
   const load = useCallback(async () => {
     if (!date) return;
+    // Etapa 5: nepřiřazené zápisy a přejezdy dne -> zakázky podle míst.
+    await assignOrdersAuto(date, date).catch(() => {});
+    setOrderOptions((await listOrders()).filter((o) => o.status !== 'paid').map((o) => ({ id: o.id, name: o.name })));
     const [s, r, n, c, v, t] = await Promise.all([
       getSettings(),
       getDayRecords(date),
@@ -274,10 +279,11 @@ export default function DayDetailScreen() {
 
   // Změna jednotky vezme sazbu té jednotky z AKTUÁLNÍHO ceníku; uložený
   // příplatek položky zůstává.
-  const handleSaveRecord = async (record: DayWorkRecordWithCategory, unit: RateUnit, quantity: number) => {
+  const handleSaveRecord = async (record: DayWorkRecordWithCategory, unit: RateUnit, quantity: number, orderId: number | null) => {
     const category = categoryById.get(record.categoryId);
     const rateKc = unit === record.unit || !category ? record.rateKc : category.rates[unit];
     await updateDayRecord(record.id, { quantity, unit, rateKc });
+    if (orderId !== record.orderId) await setRecordOrder(record.id, orderId);
     setSheetMode(null);
     await load();
   };
@@ -414,6 +420,7 @@ export default function DayDetailScreen() {
 
   const saveTripEdit = async (trip: Trip, edit: TripEdit) => {
     await updateTripUserFields(trip.id, edit);
+    if (edit.orderId !== trip.orderId) await setTripOrder(trip.id, edit.orderId);
   };
 
   const handleSaveTrip = async (trip: Trip, edit: TripEdit) => {
@@ -653,7 +660,9 @@ export default function DayDetailScreen() {
                   const trip = tripForTravel(item.fromMs, item.toMs);
                   const key = trip ? `trip-${trip.id}` : `travel-${index}`;
                   const kmLabel = trip
-                    ? ` · ${trip.isEstimate && trip.kmOverride === null ? '≈ ' : ''}${formatNumberCs(Math.round(tripKm(trip) * 10) / 10)} km`
+                    ? ` · ${trip.isEstimate && trip.kmOverride === null ? '≈ ' : ''}${formatNumberCs(Math.round(tripKm(trip) * 10) / 10)} km${
+                        trip.roadStatus === 'pending' && trip.kmOverride === null ? ' (dopočítává se)' : ''
+                      }`
                     : '';
                   return (
                     <TouchableOpacity
@@ -792,6 +801,7 @@ export default function DayDetailScreen() {
         onAdd={handleAdd}
         onAddDefaults={handleAddDefaults}
         onSave={handleSaveRecord}
+        orders={orderOptions}
         onDelete={handleDeleteRecord}
       />
 
@@ -814,6 +824,7 @@ export default function DayDetailScreen() {
                 kmOverride: tripEditTarget.kmOverride,
                 isPrivate: tripEditTarget.isPrivate,
                 vehicleCategoryId: tripEditTarget.vehicleCategoryId,
+                orderId: tripEditTarget.orderId,
               }).reduce((sum, t) => sum + tripKm(t), 0)
             : 0
         }
@@ -822,6 +833,7 @@ export default function DayDetailScreen() {
         onAddToWork={handleAddTripToWork}
         onDiscardRoute={handleDiscardRoute}
         onDelete={handleDeleteTrip}
+        orders={orderOptions}
       />
 
       <BottomSheetModal visible={visitEditTarget !== null} onClose={() => setVisitEditTarget(null)}>

@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 
 import { backupsToDelete, formatRecoveryKey, parseRecoveryKey } from '../lib/backupKey';
 import { buildDayTimeline } from '../lib/dayTimeline';
+import { computeOrderStats } from '../lib/orderStats';
 import { proposeStayRecord } from '../lib/stayProposal';
 import { DEFAULT_SETTINGS, type WorkCategory } from '../lib/types';
 import { applyRounding } from '../lib/workCalc';
@@ -205,6 +206,40 @@ const tests: Array<[string, () => void]> = [
     assert.equal(acceptRoadDistance(1000, 9000), 1000); // nesmyslná objížďka
     assert.equal(acceptRoadDistance(1000, -1), 1000); // trasa nenalezena
     assert.equal(tripKm({ kmOverride: null, distanceM: 20600, roadDistanceM: 24800 }), 24.8);
+  }],
+  // --- etapa 5: zakázky ---
+  ['zakázka: k fakturaci po strojích a km, nevyfakturováno, výsledek a Kč/h', () => {
+    const rec = (name: string, id: number, q: number, rate: number, batch: number | null, pct = 0) => ({ categoryId: id, categoryName: name, color: '#fff', unit: 'hour' as const, quantity: q, rateKc: rate, surchargePct: pct, date: '2026-10-05', authorId: 1, invoiceBatchId: batch });
+    const stats = computeOrderStats({
+      priceMode: 'budget',
+      fixedPriceKc: null,
+      budgetKc: 10000,
+      records: [rec('Bagr', 1, 4, 1000, 7), rec('Bagr', 1, 2, 1000, null, 25), rec('Ruční práce', 2, 3, 400, null)],
+      trips: [{ km: 20, rateKc: 10, date: '2026-10-05', invoiceBatchId: null }],
+      expenses: [{ amountKc: 500, category: 'material', date: '2026-10-05' }],
+      fuelCostKc: 300,
+      fuelLiters: 15,
+      invoicedKc: 4000,
+      people: new Map([[1, 'Já']]),
+    });
+    assert.equal(stats.lines[0].name, 'Bagr');
+    assert.equal(stats.lines[0].amountKc, 4000 + 2500); // příplatek 25 % u druhé položky
+    assert.equal(stats.kmAmountKc, 200);
+    assert.equal(stats.ratesTotalKc, 6500 + 1200 + 200);
+    assert.equal(stats.unbilledKc, 2500 + 1200 + 200); // vyfakturovaná položka se nepočítá
+    assert.equal(stats.resultKc, 7900 - 500 - 300);
+    assert.equal(stats.hours, 9);
+    assert.ok(stats.kcPerHour !== null && Math.abs(stats.kcPerHour - 7100 / 9) < 0.01);
+    assert.equal(Math.round(stats.budgetPct ?? 0), 79);
+    assert.deepEqual(stats.people, [{ name: 'Já', hours: 9 }]);
+  }],
+  ['zakázka s pevnou cenou: k fakturaci = pevná cena minus vystavené podklady', () => {
+    const stats = computeOrderStats({
+      priceMode: 'fixed', fixedPriceKc: 50000, budgetKc: null, records: [], trips: [], expenses: [], fuelCostKc: 0, fuelLiters: 0, invoicedKc: 20000, people: new Map(),
+    });
+    assert.equal(stats.billableKc, 50000);
+    assert.equal(stats.unbilledKc, 30000);
+    assert.equal(stats.budgetPct, null);
   }],
 ];
 

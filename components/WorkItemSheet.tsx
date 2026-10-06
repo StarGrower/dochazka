@@ -12,6 +12,7 @@ import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native
 
 import BottomSheetModal from './BottomSheetModal';
 import NumPad from './NumPad';
+import OrderPicker, { type OrderOption } from './OrderPicker';
 import { formatKc, formatQuantity, UNIT_RATE_LABEL } from '@/lib/format';
 import type { AppSettings, DayWorkRecordWithCategory, RateUnit, WorkCategory } from '@/lib/types';
 import { applyRounding, defaultQuantityFor, type DefaultItemProposal } from '@/lib/workCalc';
@@ -30,7 +31,8 @@ interface WorkItemSheetProps {
   onClose: () => void;
   onAdd: (category: WorkCategory, unit: RateUnit, quantity: number) => void;
   onAddDefaults: (proposals: DefaultItemProposal[]) => void;
-  onSave: (record: DayWorkRecordWithCategory, unit: RateUnit, quantity: number) => void;
+  onSave: (record: DayWorkRecordWithCategory, unit: RateUnit, quantity: number, orderId: number | null) => void;
+  orders?: OrderOption[]; // ruční přeřazení zakázky (etapa 5)
   onDelete: (record: DayWorkRecordWithCategory) => void;
 }
 
@@ -49,7 +51,9 @@ export default function WorkItemSheet({
   onAddDefaults,
   onSave,
   onDelete,
+  orders = [],
 }: WorkItemSheetProps) {
+  const [orderId, setOrderId] = useState<number | null>(null);
   const [category, setCategory] = useState<WorkCategory | null>(null);
   const [unit, setUnit] = useState<RateUnit>('hour');
   const [quantity, setQuantity] = useState(0);
@@ -61,6 +65,7 @@ export default function WorkItemSheet({
       setCategory(categoryById.get(mode.record.categoryId) ?? null);
       setUnit(mode.record.unit);
       setQuantity(mode.record.quantity);
+      setOrderId(mode.record.orderId);
     } else {
       setCategory(null);
     }
@@ -137,11 +142,12 @@ export default function WorkItemSheet({
         {record.surchargePct !== surcharge && record.surchargePct > 0 && (
           <Text style={styles.hint}>Uložený příplatek této položky: +{record.surchargePct} %.</Text>
         )}
+        <OrderPicker orders={orders} value={orderId} onChange={setOrderId} locked={record.invoiceBatchId !== null} />
         <View style={styles.buttons}>
           <TouchableOpacity style={styles.secondaryButton} onPress={() => onDelete(record)}>
             <Text style={styles.deleteText}>Smazat</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.primaryButton} onPress={() => onSave(record, unit, quantity)}>
+          <TouchableOpacity style={styles.primaryButton} onPress={() => onSave(record, unit, quantity, orderId)}>
             <Text style={styles.primaryButtonText}>ULOŽIT</Text>
           </TouchableOpacity>
         </View>

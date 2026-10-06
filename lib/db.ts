@@ -53,7 +53,8 @@ const DB_NAME = 'dochazka.db';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-function getDb(): Promise<SQLite.SQLiteDatabase> {
+// Sdílené připojení i pro moduly dalších etap (lib/orders.ts, lib/machines.ts...).
+export function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
     dbPromise = SQLite.openDatabaseAsync(DB_NAME);
   }
@@ -223,7 +224,7 @@ const SCHEMA_VERSION = 5;
 // se migruje (existující záloha se nikdy nepřepisuje).
 function backupFileName(fromVersion: number): string {
   if (fromVersion < 2) return 'dochazka-zaloha-pred-opravami-2.db';
-  if (fromVersion === 4) return 'dochazka-zaloha-pred-opravami-etapy-3.db';
+  if (fromVersion === 4) return 'dochazka-zaloha-pred-etapami-5-7.db';
   // v2 -> "před etapou 3", v3 -> "před etapou 4" (verze DB = číslo etapy)
   return `dochazka-zaloha-pred-etapou-${fromVersion + 1}.db`;
 }
@@ -264,7 +265,7 @@ async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: 
     await db.execAsync('PRAGMA user_version = 4');
   }
   if (version < 5) {
-    await migrateV5RoadDistance(db);
+    await migrateV5(db);
     await db.execAsync('PRAGMA user_version = 5');
   }
 }
@@ -554,13 +555,353 @@ async function migrateV4Reminders(db: SQLite.SQLiteDatabase): Promise<void> {
   `);
 }
 
-// Oprava po terénním testu etapy 3 - km po silnici. Jen nové sloupce;
-// stávající přejezdy se dopočítají po silnici (road_status NULL = čeká),
-// původní GPS hodnota (distance_m) zůstává.
-async function migrateV5RoadDistance(db: SQLite.SQLiteDatabase): Promise<void> {
+// Společná migrace v5: opravy po terénním testu etapy 3 (km po silnici)
+// + etapy 5 (zakázky), 6 (stroje, servis, tankování) a 7 (kniha jízd).
+// Jen nové tabulky a sloupce; stávající data beze změny, jen doplněné
+// uuid/autor (příprava na sdílení v etapě 8) a počitadlo u strojů.
+const UUID_SQL = 'lower(hex(randomblob(16)))';
+
+// Tabulky, které dostanou uuid / updated_at / author_id (etapa 8).
+const SYNC_TABLES = ['day_work_records', 'trips', 'places', 'work_categories', 'visits'] as const;
+
+async function migrateV5(db: SQLite.SQLiteDatabase): Promise<void> {
+  // --- opravy etapy 3: km po silnici ---
   await addColumnIfMissing(db, 'trips', 'road_distance_m', 'REAL');
   await addColumnIfMissing(db, 'trips', 'road_status', 'TEXT');
   await addColumnIfMissing(db, 'trips', 'road_note', 'TEXT');
+
+  // --- lidé (autor záznamů, řidič; v etapě 8 i další) ---
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS people (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      name TEXT NOT NULL,
+      is_me INTEGER NOT NULL DEFAULT 0,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT
+    );
+  `);
+  const me = await db.getFirstAsync<{ value: string }>("SELECT value FROM settings WHERE key = 'profile_name'");
+  let myName = 'Já';
+  try {
+    myName = (me ? (JSON.parse(me.value) as string) : '') || 'Já';
+  } catch {
+    myName = 'Já';
+  }
+  await db.runAsync('INSERT OR IGNORE INTO people (id, name, is_me) VALUES (1, ?, 1)', [myName]);
+
+  // --- uuid / updated_at / author_id u stávajících tabulek ---
+  for (const table of SYNC_TABLES) {
+    await addColumnIfMissing(db, table, 'uuid', 'TEXT');
+    await addColumnIfMissing(db, table, 'updated_at', 'TEXT');
+    await addColumnIfMissing(db, table, 'author_id', 'INTEGER NOT NULL DEFAULT 1');
+    await db.execAsync(`
+      UPDATE ${table} SET uuid = ${UUID_SQL} WHERE uuid IS NULL;
+      CREATE TRIGGER IF NOT EXISTS trg_${table}_uuid AFTER INSERT ON ${table} WHEN NEW.uuid IS NULL
+      BEGIN UPDATE ${table} SET uuid = ${UUID_SQL}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END;
+      CREATE TRIGGER IF NOT EXISTS trg_${table}_updated AFTER UPDATE ON ${table}
+      BEGIN UPDATE ${table} SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END;
+    `);
+  }
+
+  // --- etapa 5: zakázky ---
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS clients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      name TEXT NOT NULL,
+      ico TEXT NOT NULL DEFAULT '',
+      dic TEXT NOT NULL DEFAULT '',
+      address TEXT NOT NULL DEFAULT '',
+      note TEXT NOT NULL DEFAULT '',
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      author_id INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      name TEXT NOT NULL,
+      client_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'running',
+      price_mode TEXT NOT NULL DEFAULT 'rates',
+      fixed_price_kc REAL,
+      budget_kc REAL,
+      date_from TEXT,
+      date_to TEXT,
+      note TEXT NOT NULL DEFAULT '',
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      author_id INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS order_places (
+      order_id INTEGER NOT NULL,
+      place_id INTEGER NOT NULL,
+      PRIMARY KEY (order_id, place_id)
+    );
+    CREATE TABLE IF NOT EXISTS order_expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      order_id INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      amount_kc REAL NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      category TEXT NOT NULL DEFAULT 'other',
+      invoice_batch_id INTEGER,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      author_id INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+    CREATE TABLE IF NOT EXISTS invoice_batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      order_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      total_kc REAL NOT NULL DEFAULT 0,
+      note TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'invoiced',
+      paid_at TEXT,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      author_id INTEGER NOT NULL DEFAULT 1
+    );
+  `);
+  // order_id: NULL = zatím nepřiřazeno (automatika může), -1 = ručně "bez zakázky".
+  await addColumnIfMissing(db, 'day_work_records', 'order_id', 'INTEGER');
+  await addColumnIfMissing(db, 'day_work_records', 'invoice_batch_id', 'INTEGER');
+  await addColumnIfMissing(db, 'trips', 'order_id', 'INTEGER');
+  await addColumnIfMissing(db, 'trips', 'invoice_batch_id', 'INTEGER');
+
+  // --- etapa 6: stroje, servis, tankování ---
+  await addColumnIfMissing(db, 'work_categories', 'manufacturer', "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing(db, 'work_categories', 'model', "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing(db, 'work_categories', 'serial_number', "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing(db, 'work_categories', 'year_built', 'INTEGER');
+  await addColumnIfMissing(db, 'work_categories', 'plate', "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing(db, 'work_categories', 'counter_unit', "TEXT NOT NULL DEFAULT 'none'");
+  await addColumnIfMissing(db, 'work_categories', 'counter_start_value', 'REAL');
+  await addColumnIfMissing(db, 'work_categories', 'counter_start_date', 'TEXT');
+  await addColumnIfMissing(db, 'work_categories', 'template_id', 'INTEGER');
+  await addColumnIfMissing(db, 'work_categories', 'bluetooth_name', "TEXT NOT NULL DEFAULT ''");
+  // Počitadlo podle typu: stroj s výchozí jednotkou km = vozidlo (km),
+  // jiný stroj = motohodiny, práce = jen datum.
+  await db.execAsync(`
+    UPDATE work_categories SET counter_unit = CASE
+      WHEN kind = 'machine' AND default_unit = 'km' THEN 'km'
+      WHEN kind = 'machine' THEN 'mth'
+      ELSE 'none' END
+    WHERE counter_unit = 'none';
+
+    CREATE TABLE IF NOT EXISTS machine_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'custom',
+      counter_unit TEXT NOT NULL DEFAULT 'mth',
+      is_builtin INTEGER NOT NULL DEFAULT 0,
+      service_plan TEXT NOT NULL DEFAULT '[]',
+      is_deleted INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS photos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      mime TEXT NOT NULL DEFAULT 'image/jpeg',
+      data BLOB NOT NULL,
+      width INTEGER,
+      height INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS counter_readings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      category_id INTEGER NOT NULL,
+      read_at TEXT NOT NULL,
+      value REAL NOT NULL,
+      source TEXT NOT NULL DEFAULT 'manual',
+      photo_id INTEGER,
+      fuel_entry_id INTEGER,
+      note TEXT NOT NULL DEFAULT '',
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      author_id INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_counter_readings_cat ON counter_readings (category_id, read_at);
+    CREATE TABLE IF NOT EXISTS service_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      category_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      interval_value REAL,
+      interval_days INTEGER,
+      warn_first REAL,
+      warn_second REAL,
+      warn_days_first INTEGER NOT NULL DEFAULT 30,
+      warn_days_second INTEGER NOT NULL DEFAULT 7,
+      last_done_value REAL,
+      last_done_date TEXT,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+    CREATE TABLE IF NOT EXISTS service_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      category_id INTEGER NOT NULL,
+      service_item_id INTEGER,
+      done_at TEXT NOT NULL,
+      counter_value REAL,
+      work_done TEXT NOT NULL DEFAULT '',
+      material TEXT NOT NULL DEFAULT '',
+      done_by TEXT NOT NULL DEFAULT '',
+      note TEXT NOT NULL DEFAULT '',
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      author_id INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+    CREATE TABLE IF NOT EXISTS defects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      category_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      description TEXT NOT NULL,
+      photo_id INTEGER,
+      severity TEXT NOT NULL DEFAULT 'ok',
+      resolved_at TEXT,
+      resolution_note TEXT NOT NULL DEFAULT '',
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      author_id INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE IF NOT EXISTS fuel_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      category_id INTEGER,
+      fueled_at TEXT NOT NULL,
+      liters REAL NOT NULL,
+      price_total_kc REAL,
+      price_per_l REAL,
+      fuel_type TEXT NOT NULL DEFAULT 'diesel',
+      full_tank INTEGER NOT NULL DEFAULT 1,
+      counter_value REAL,
+      counter_photo_id INTEGER,
+      receipt_photo_id INTEGER,
+      latitude REAL,
+      longitude REAL,
+      payment TEXT NOT NULL DEFAULT 'own_card',
+      reimbursed_at TEXT,
+      source TEXT NOT NULL DEFAULT 'pump',
+      note TEXT NOT NULL DEFAULT '',
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      author_id INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_fuel_entries_cat ON fuel_entries (category_id, fueled_at);
+    CREATE TABLE IF NOT EXISTS fuel_stock_moves (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      moved_at TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      liters REAL NOT NULL,
+      price_total_kc REAL,
+      fuel_entry_id INTEGER,
+      note TEXT NOT NULL DEFAULT '',
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      author_id INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+  `);
+  await seedMachineTemplates(db);
+
+  // --- etapa 7: kniha jízd ---
+  await addColumnIfMissing(db, 'trips', 'purpose', "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing(db, 'trips', 'driver_id', 'INTEGER NOT NULL DEFAULT 1');
+  await addColumnIfMissing(db, 'trips', 'vehicle_source', 'TEXT');
+  await addColumnIfMissing(db, 'trips', 'odo_km', 'REAL'); // km opravené podle tachometru
+  await addColumnIfMissing(db, 'trips', 'edited_after_close', 'INTEGER NOT NULL DEFAULT 0');
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS logbook_gaps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      category_id INTEGER NOT NULL,
+      from_at TEXT NOT NULL,
+      to_at TEXT NOT NULL,
+      km REAL NOT NULL,
+      driver_id INTEGER,
+      note TEXT NOT NULL DEFAULT '',
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+    CREATE TABLE IF NOT EXISTS logbook_months (
+      category_id INTEGER NOT NULL,
+      month TEXT NOT NULL,
+      closed_at TEXT NOT NULL,
+      PRIMARY KEY (category_id, month)
+    );
+    CREATE INDEX IF NOT EXISTS idx_trips_vehicle ON trips (vehicle_category_id, start_at);
+    CREATE INDEX IF NOT EXISTS idx_day_work_records_order ON day_work_records (order_id);
+    CREATE INDEX IF NOT EXISTS idx_trips_order ON trips (order_id);
+  `);
+}
+
+// Vestavěné šablony strojů (etapa 6) s výchozím servisním plánem -
+// intervaly jsou obvyklé hodnoty, u každého stroje jdou upravit.
+const BUILTIN_TEMPLATES: { name: string; kind: string; counterUnit: string; plan: { name: string; value?: number; days?: number }[] }[] = [
+  {
+    name: 'Bagr',
+    kind: 'excavator',
+    counterUnit: 'mth',
+    plan: [
+      { name: 'Motorový olej a filtr', value: 250, days: 365 },
+      { name: 'Palivový filtr', value: 500 },
+      { name: 'Vzduchový filtr', value: 500 },
+      { name: 'Hydraulický olej a filtry', value: 1000, days: 730 },
+      { name: 'Mazání čepů', value: 50 },
+    ],
+  },
+  {
+    name: 'Nákladní automobil',
+    kind: 'truck',
+    counterUnit: 'km',
+    plan: [
+      { name: 'Motorový olej a filtry', value: 30000, days: 365 },
+      { name: 'Kontrola brzd', value: 30000 },
+      { name: 'STK', days: 365 },
+      { name: 'Kalibrace tachografu', days: 730 },
+    ],
+  },
+  {
+    name: 'Traktor',
+    kind: 'tractor',
+    counterUnit: 'mth',
+    plan: [
+      { name: 'Motorový olej a filtr', value: 250, days: 365 },
+      { name: 'Palivový a vzduchový filtr', value: 500 },
+      { name: 'Převodový a hydraulický olej', value: 1000, days: 730 },
+      { name: 'STK', days: 730 },
+    ],
+  },
+  {
+    name: 'Osobní automobil',
+    kind: 'car',
+    counterUnit: 'km',
+    plan: [
+      { name: 'Motorový olej a filtr', value: 15000, days: 365 },
+      { name: 'STK', days: 730 },
+      { name: 'Brzdová kapalina', days: 730 },
+      { name: 'Přezutí pneumatik', days: 182 },
+    ],
+  },
+];
+
+async function seedMachineTemplates(db: SQLite.SQLiteDatabase): Promise<void> {
+  const row = await db.getFirstAsync<{ c: number }>('SELECT COUNT(*) as c FROM machine_templates WHERE is_builtin = 1');
+  if (row && row.c > 0) return;
+  for (const t of BUILTIN_TEMPLATES) {
+    await db.runAsync('INSERT INTO machine_templates (name, kind, counter_unit, is_builtin, service_plan) VALUES (?, ?, ?, 1, ?)', [
+      t.name,
+      t.kind,
+      t.counterUnit,
+      JSON.stringify(t.plan),
+    ]);
+  }
 }
 
 export function normalizeIso(value: string): string {
@@ -676,6 +1017,8 @@ interface DayWorkRecordRow {
   surcharge_pct: number;
   source: DayRecordSource;
   place_id: number | null;
+  order_id: number | null;
+  invoice_batch_id: number | null;
   category_name: string;
   is_deleted: number;
   color: string;
@@ -687,6 +1030,8 @@ function mapDayWorkRecord(row: DayWorkRecordRow): DayWorkRecordWithCategory {
     date: row.date,
     categoryId: row.category_id,
     placeId: row.place_id,
+    orderId: row.order_id,
+    invoiceBatchId: row.invoice_batch_id,
     quantity: row.quantity,
     unit: row.unit,
     rateKc: row.rate_kc,
@@ -701,7 +1046,7 @@ function mapDayWorkRecord(row: DayWorkRecordRow): DayWorkRecordWithCategory {
 export async function getDayRecords(date: string): Promise<DayWorkRecordWithCategory[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<DayWorkRecordRow>(
-    `SELECT r.id, r.date, r.category_id, r.quantity, r.unit, r.rate_kc, r.surcharge_pct, r.source, r.place_id,
+    `SELECT r.id, r.date, r.category_id, r.quantity, r.unit, r.rate_kc, r.surcharge_pct, r.source, r.place_id, r.order_id, r.invoice_batch_id,
             c.name as category_name, c.is_deleted, c.color
      FROM day_work_records r
      JOIN work_categories c ON c.id = r.category_id
@@ -1263,6 +1608,13 @@ interface TripRow {
   user_edited: number;
   is_deleted: number;
   deleted_by: string | null;
+  order_id: number | null;
+  invoice_batch_id: number | null;
+  purpose: string | null;
+  driver_id: number | null;
+  vehicle_source: Trip['vehicleSource'];
+  odo_km: number | null;
+  edited_after_close: number | null;
 }
 
 export interface TripWithState extends Trip {
@@ -1298,6 +1650,13 @@ function mapTrip(row: TripRow): TripWithState {
     loggedAt: row.logged_at,
     userEdited: row.user_edited === 1,
     deletedBy: row.deleted_by,
+    orderId: row.order_id ?? null,
+    invoiceBatchId: row.invoice_batch_id ?? null,
+    purpose: row.purpose ?? '',
+    driverId: row.driver_id ?? 1,
+    vehicleSource: row.vehicle_source ?? null,
+    odoKm: row.odo_km ?? null,
+    editedAfterClose: row.edited_after_close === 1,
   };
 }
 

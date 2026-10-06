@@ -35,6 +35,8 @@ export interface DayWorkRecord {
   date: string; // YYYY-MM-DD
   categoryId: number;
   placeId: number | null; // místo, ke kterému zápis patří (zápis pobytu, etapa 4)
+  orderId: number | null; // zakázka (etapa 5): null = nepřiřazeno, -1 = ručně bez zakázky
+  invoiceBatchId: number | null; // podklad k faktuře, ve kterém je položka vyúčtovaná
   quantity: number; // v jednotce `unit`
   unit: RateUnit;
   // Sazba a příplatek uložené v okamžiku zápisu (C1/C2) - pozdější
@@ -132,6 +134,71 @@ export interface Trip {
   gpsFirstPointAt: string | null;
   gpsNote: string | null; // proč chybí body (deník)
   isDeleted: boolean;
+  // etapa 5
+  orderId: number | null;
+  invoiceBatchId: number | null;
+  // etapa 7 - kniha jízd
+  purpose: string;
+  driverId: number;
+  vehicleSource: 'default' | 'learned' | 'bluetooth' | 'manual' | null;
+  odoKm: number | null; // km opravené podle tachometru (původní zůstávají)
+  editedAfterClose: boolean;
+}
+
+// --- etapa 5 - zakázky ---
+
+export type OrderStatus = 'preparing' | 'running' | 'done' | 'invoiced' | 'paid';
+export type OrderPriceMode = 'rates' | 'fixed' | 'budget';
+export type ExpenseCategory = 'material' | 'transport' | 'subcontract' | 'other';
+
+export interface Client {
+  id: number;
+  name: string;
+  ico: string;
+  dic: string;
+  address: string;
+  note: string;
+}
+
+export interface Order {
+  id: number;
+  name: string;
+  clientId: number | null;
+  clientName: string | null;
+  status: OrderStatus;
+  priceMode: OrderPriceMode;
+  fixedPriceKc: number | null;
+  budgetKc: number | null;
+  dateFrom: string | null; // YYYY-MM-DD
+  dateTo: string | null;
+  note: string;
+  placeIds: number[];
+}
+
+export interface OrderExpense {
+  id: number;
+  orderId: number;
+  date: string;
+  amountKc: number;
+  description: string;
+  category: ExpenseCategory;
+  invoiceBatchId: number | null;
+}
+
+export interface InvoiceBatch {
+  id: number;
+  orderId: number;
+  createdAt: string;
+  totalKc: number;
+  note: string;
+  status: 'invoiced' | 'paid';
+  paidAt: string | null;
+}
+
+export interface Person {
+  id: number;
+  name: string;
+  isMe: boolean;
 }
 
 export interface RoutePoint {
