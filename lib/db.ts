@@ -683,11 +683,12 @@ async function migrateV5(db: SQLite.SQLiteDatabase): Promise<void> {
   await addColumnIfMissing(db, 'work_categories', 'counter_start_date', 'TEXT');
   await addColumnIfMissing(db, 'work_categories', 'template_id', 'INTEGER');
   await addColumnIfMissing(db, 'work_categories', 'bluetooth_name', "TEXT NOT NULL DEFAULT ''");
-  // Počitadlo podle typu: stroj s výchozí jednotkou km = vozidlo (km),
+  // Počitadlo podle typu: stroj s výchozí jednotkou km nebo sazbou za km
+  // = vozidlo (km),
   // jiný stroj = motohodiny, práce = jen datum.
   await db.execAsync(`
     UPDATE work_categories SET counter_unit = CASE
-      WHEN kind = 'machine' AND default_unit = 'km' THEN 'km'
+      WHEN kind = 'machine' AND (default_unit = 'km' OR rate_km_kc > 0) THEN 'km'
       WHEN kind = 'machine' THEN 'mth'
       ELSE 'none' END
     WHERE counter_unit = 'none';
@@ -1176,6 +1177,7 @@ const SETTINGS_KEYS: { [K in keyof AppSettings]: string } = {
   reminderOnDeparture: 'reminder_on_departure',
   reminderMinStayMinutes: 'reminder_min_stay_minutes',
   reminderUnknownMinStayMinutes: 'reminder_unknown_min_stay_minutes',
+  logbookAllowanceKcPerKm: 'logbook_allowance_kc_per_km',
   reminderDelayMinutes: 'reminder_delay_minutes',
   reminderOnArriveHome: 'reminder_on_arrive_home',
   reminderEvening: 'reminder_evening',
@@ -1831,6 +1833,21 @@ export async function updateTripUserFields(
     'UPDATE trips SET km_override = ?, is_private = ?, vehicle_category_id = ?, user_edited = 1 WHERE id = ?',
     [fields.kmOverride, fields.isPrivate ? 1 : 0, fields.vehicleCategoryId, id]
   );
+  // Etapa 7: úprava jízdy v uzavřeném měsíci knihy jízd se vyznačí
+  // (jízda bez vozidla patří výchozímu - stačí uzavřený měsíc kteréhokoli).
+  await db.runAsync(
+    `UPDATE trips SET edited_after_close = 1 WHERE id = ? AND EXISTS (
+       SELECT 1 FROM logbook_months m WHERE m.month = strftime('%Y-%m', trips.start_at, 'localtime')
+         AND (trips.vehicle_category_id IS NULL OR m.category_id = trips.vehicle_category_id))`,
+    [id]
+  );
+}
+
+// Kniha jízd (etapa 7): všechny nesmazané jízdy, nejstarší první.
+export async function listAllTrips(): Promise<TripWithState[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<TripRow>('SELECT * FROM trips WHERE is_deleted = 0 ORDER BY start_at');
+  return rows.map(mapTrip);
 }
 
 // "Zahodit trasu" - body se od přejezdu odpojí a už se k němu nepřiřadí

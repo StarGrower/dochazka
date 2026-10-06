@@ -19,6 +19,7 @@
 
 import * as Location from 'expo-location';
 
+import DochazkaNative from '../modules/dochazka-native/src/DochazkaNative';
 import { getBatteryLevelSafe } from './battery';
 import {
   addDebugLogEntry,
@@ -52,6 +53,28 @@ const KEY_TRIP_MOTION = 'trip_motion'; // JSON MotionState - přežije restart p
 // Sledování zastavené stáním (zácpa, obchod, pumpa) bez nového pobytu:
 // při další události pohybu se obnoví (jinak by zbytek cesty byl bez bodů).
 const KEY_TRIP_PAUSED = 'trip_paused'; // JSON PausedTrip
+export const KEY_TRIP_BT_LOG = 'trip_bt_log'; // JSON [{at, name}] - Bluetooth audio při startu/konci jízdy (etapa 7)
+
+// Etapa 7: název připojeného Bluetooth/CarPlay výstupu (auto) -> návrh
+// vozidla v knize jízd. Jen návrh, nic se samo nepřiřadí.
+async function noteBluetooth(at: string): Promise<string> {
+  let name = '';
+  try {
+    name = DochazkaNative.bluetoothAudioRoute();
+  } catch {
+    name = '';
+  }
+  if (!name) return '';
+  let log: { at: string; name: string }[] = [];
+  try {
+    log = JSON.parse((await getInternalValue(KEY_TRIP_BT_LOG)) || '[]');
+  } catch {
+    log = [];
+  }
+  log.push({ at, name });
+  await setInternalValue(KEY_TRIP_BT_LOG, JSON.stringify(log.slice(-200)));
+  return name;
+}
 const MAX_PAUSE_MS = 3 * 60 * 60 * 1000;
 
 interface PausedTrip {
@@ -143,12 +166,13 @@ async function startSession(departedAt: string, reason: string, settings: AppSet
     await setInternalValue(KEY_TRIP_LAST_FAILURE, JSON.stringify({ at: startedAt, reason: error }));
   }
   await setSession({ startedAt, departedAt, reason, error });
+  const bt = await noteBluetooth(startedAt);
   await addDebugLogEntry({
     timestamp: startedAt,
     eventType: 'trip_start',
     detail: error
       ? `start GPS SELHAL (${reason}, odjezd ${hhmm(departedAt)}): ${error} - přejezd bude odhad`
-      : `start sledování jízdy (${reason}) · odjezd ${hhmm(departedAt)} · ${settings.routeQuality === 'precise' ? 'přesná' : 'úsporná'} kvalita`,
+      : `start sledování jízdy (${reason}) · odjezd ${hhmm(departedAt)} · ${settings.routeQuality === 'precise' ? 'přesná' : 'úsporná'} kvalita${bt ? ` · Bluetooth ${bt}` : ''}`,
     batteryLevel: await getBatteryLevelSafe(),
     latitude: null,
     longitude: null,
@@ -157,6 +181,7 @@ async function startSession(departedAt: string, reason: string, settings: AppSet
 
 async function stopSession(session: TripSession, reason: string, pausedAt?: { latitude: number; longitude: number; t: number }): Promise<void> {
   await Location.stopLocationUpdatesAsync(TRIP_TASK_NAME).catch(() => {});
+  await noteBluetooth(new Date().toISOString());
   await setSession(null);
   await setInternalValue(
     KEY_TRIP_PAUSED,

@@ -284,6 +284,7 @@ export interface AppSettings {
   reminderOnDeparture: boolean; // po odjezdu z pracovního místa
   reminderMinStayMinutes: number; // jen po pobytu aspoň tak dlouhém
   reminderUnknownMinStayMinutes: number; // neznámá místa - až od tak dlouhého pobytu
+  logbookAllowanceKcPerKm: number; // etapa 7 - náhrada za služební km soukromým vozem (0 = nepočítat)
   reminderDelayMinutes: number; // odeslat až po tolika minutách (návrat = zrušit)
   reminderOnArriveHome: boolean; // po příjezdu domů souhrn nezapsaných pobytů
   reminderEvening: boolean; // večerní souhrn (jen když něco chybí)
@@ -332,6 +333,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reminderOnDeparture: false,
   reminderMinStayMinutes: 30,
   reminderUnknownMinStayMinutes: 60,
+  logbookAllowanceKcPerKm: 0,
   reminderDelayMinutes: 10,
   reminderOnArriveHome: false,
   reminderEvening: false,

@@ -12,7 +12,7 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Test v terénu proběhl 2.-4. 10. 2026.**
 **Oprava 2 (po terénním testu etapy 2) - HOTOVO (skupiny A-F), build OVĚŘEN (run 37210061504, 13m21s, všechny kroky zelené vč. Swift modulu, `.ipa` ~15 MB). Čeká na test v telefonu - viz "Co otestovat v telefonu (oprava 2)".**
 
-**Etapy 5-7 (zakázky, stroje, kniha jízd) - ROZPRACOVÁNO jako jeden build (commit po každé etapě), viz sekce "Etapy 5-7" níž. Etapa 5 HOTOVO, etapa 6 HOTOVO.**
+**Etapy 5-7 (zakázky, stroje, kniha jízd) + opravy po testu 5. 10. + zaokrouhlení / neznámá místa - HOTOVO jako jeden build (commit po každé etapě), viz sekce "Etapy 5-7" níž. Build: čeká.**
 **Etapa 4 (záloha, stav záznamu, připomenutí, výkaz pro šéfa) - HOTOVO, build OVĚŘEN (run 37242592887, 16m52s, vše zelené vč. Swift modulu dochazka-native, `.ipa` ~15,8 MB). Čeká na test - viz "Etapa 4 - co testovat".**
 **Plán etap 4-8: `PLAN_DALSI_ETAPY.md` (jen lokálně, v `.gitignore`), grafické předlohy v `private/` (predloha-pripominka.html, predloha-zakazky.html).**
 **Etapa 3 (přejezdy, trasy, km, mapa) + ikona, logo a úvodní animace - HOTOVO, build OVĚŘEN (run 37218589500, 15m34s, vše zelené vč. react-native-maps a react-native-svg, `.ipa` ~15 MB). Čeká na test v terénu - viz "Etapa 3 - co testovat v terénu".**
@@ -117,6 +117,40 @@ opakovaně bez chyb, uuid u všech řádků, trigger u nového řádku.
 - **Fotky** zmenšené na 1280 px JPEG v tabulce `photos` -> jsou v
   šifrované záloze. OCR = Apple Vision v telefonu (bez sítě), jazyk en-US
   (čísla čte spolehlivě; čeština ve Vision na starších iOS chybí).
+- **Přehled tankování** za rok (PDF / Excel) - odkaz pod seznamem strojů.
+
+### Etapa 7 - kniha jízd (HOTOVO)
+
+- **Obrazovka** `app/logbook.tsx` (Stroje → KNIHA JÍZD): všechny jízdy
+  z přejezdů bez omezení, měsíc / rok / vše, služební / soukromé,
+  vozidlo, řidič, hledání (místo, účel); souhrn služební / soukromé km,
+  podíl a náhrada (Kč/km se zadává v Exportu, uloží se do nastavení).
+- **NETRIVIÁLNÍ ROZHODNUTÍ - návrhy** (`lib/logbookCalc.ts` `suggestTrip`,
+  testované): učí se jen z potvrzených jízd (zadaný účel nebo ruční
+  úprava); nejdřív stejná trasa, pak stejný cíl. Soukromá a vozidlo se
+  navrhnou jen při shodě aspoň 2/3 jízd (min. 2). Bez historie účel podle
+  zakázky, jinak podle cíle. Vozidlo i podle Bluetooth: při startu a
+  konci sledování jízdy se zapíše název Bluetooth/CarPlay výstupu
+  (interní hodnota `trip_bt_log`, posledních 200) a porovná se s
+  "Bluetooth vozidla" na kartě stroje. Návrh je kurzívou / ✓ - nic se
+  neuloží bez potvrzení (✓ u jízdy, "Potvrdit návrhy (N)" nebo úprava).
+- **Řidiči** = tabulka `people` (id 1 = já); "+ Řidič" v úpravě jízdy.
+- **NETRIVIÁLNÍ ROZHODNUTÍ - tachometr = pravda** (`reconcileOdometer`):
+  kotvy = stavy počitadla vozidla (km) z tankování, ručně, servisu +
+  počáteční stav. Mezi dvěma kotvami se porovná rozdíl tachometru s km
+  jízd (jízdy celé mezi kotvami): do 3 % + 2 km -> poměrně do jízd
+  (`trips.odo_km`, původní km zůstávají, "upraveno podle tachometru");
+  tachometr víc -> řádek "Jiný řidič / nezaznamenáno" (`logbook_gaps`) v
+  nejdelším okně mezi kotvami bez jízdy, jde přiřadit řidiči / poznámce
+  (přiřazené řádky se při přepočtu nemažou); tachometr méně -> červené
+  upozornění, nic se nemění. Přepočet při každém otevření knihy jízd,
+  uzavřené měsíce se nemění. Průběžný stav tachometru u každé jízdy.
+- **Uzavření měsíce** (`logbook_months`, po vozidlech): pozdější úprava
+  jízdy (kniha jízd i Detail dne) nastaví `edited_after_close` a export to
+  vyznačí. Měsíc jde znovu otevřít.
+- **Export** (`lib/logbookReport.ts`) PDF (A4 na šířku) / Excel podle
+  filtrů: s / bez rozpisu soukromých jízd (bez nich jen souhrn), jen moje
+  / všichni řidiči, souhrn služební / soukromé km, podíl, náhrada.
 
 ## Etapa 4 - záloha, stav záznamu, připomenutí, výkaz pro šéfa
 

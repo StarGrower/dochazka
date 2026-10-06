@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 
 import { backupsToDelete, formatRecoveryKey, parseRecoveryKey } from '../lib/backupKey';
 import { buildDayTimeline } from '../lib/dayTimeline';
+import { logbookSummary, reconcileOdometer, runningOdometer, suggestTrip } from '../lib/logbookCalc';
 import { consumptionSegments, estimateCounter, learnRatio, parseCounterText, parseReceiptText, serviceStatus, stockState, usagePerWorkday } from '../lib/machineCalc';
 import { computeOrderStats } from '../lib/orderStats';
 import { proposeStayRecord } from '../lib/stayProposal';
@@ -307,6 +308,63 @@ const tests: Array<[string, () => void]> = [
     assert.equal(r.pricePerL, 36.9);
     assert.equal(r.totalKc, 1931.35);
     assert.equal(r.date, '2026-10-06');
+  }],
+  ['kniha jízd: návrh účelu / soukromé / vozidla jen z potvrzených jízd', () => {
+    const h = (fromKey: string, toKey: string, purpose: string, isPrivate: boolean, vehicleId: number | null, confirmed = true) => ({ fromKey, toKey, purpose, isPrivate, vehicleId, confirmed });
+    const history = [
+      h('p1', 'p2', 'Stavba X - materiál', false, 5),
+      h('p1', 'p2', 'Stavba X - materiál', false, 5),
+      h('p1', 'p2', 'Stavba X', false, 6),
+      h('p3', 'p2', 'Stavba X - porada', true, 5),
+      h('p1', 'p9', 'Nepotvrzená', true, 7, false),
+    ];
+    const s = suggestTrip(history, 'p1', 'p2');
+    assert.deepEqual(s, { purpose: 'Stavba X - materiál', isPrivate: false, vehicleId: 5, basedOn: 3 });
+    // jiná trasa do stejného cíle -> podle cíle
+    assert.equal(suggestTrip(history, 'p7', 'p2')?.basedOn, 4);
+    // nepotvrzené jízdy se neučí
+    assert.equal(suggestTrip(history, 'p1', 'p9'), null);
+    // slabá shoda (1 ze 2) -> soukromá/vozidlo se nenavrhne
+    const weak = suggestTrip([h('a', 'b', 'X', true, 1), h('a', 'b', 'X', false, 2)], 'a', 'b');
+    assert.equal(weak?.isPrivate, null);
+    assert.equal(weak?.vehicleId, null);
+  }],
+  ['kniha jízd: tachometr do tolerance -> poměrná korekce, víc -> nezaznamenáno, méně -> upozornění', () => {
+    const H = 3600 * 1000;
+    const trips = [
+      { id: 1, startMs: 1 * H, endMs: 2 * H, km: 40 },
+      { id: 2, startMs: 5 * H, endMs: 6 * H, km: 60 },
+    ];
+    const a = { atMs: 0, km: 10000 };
+    // 103 km tachometr vs 100 km GPS: tolerance 3 % + 2 = 5 km
+    const w = reconcileOdometer(a, { atMs: 10 * H, km: 10103 }, trips);
+    assert.equal(w?.kind, 'within');
+    if (w?.kind === 'within') assert.deepEqual(w.corrected, [{ id: 1, km: 41.2 }, { id: 2, km: 61.8 }]);
+    const m = reconcileOdometer(a, { atMs: 10 * H, km: 10130 }, trips);
+    assert.equal(m?.kind, 'more');
+    // nejdelší okno bez jízdy: 6 h - 10 h
+    if (m?.kind === 'more') {
+      assert.equal(m.extraKm, 30);
+      assert.deepEqual(m.window, { fromMs: 6 * H, toMs: 10 * H });
+    }
+    const l = reconcileOdometer(a, { atMs: 10 * H, km: 10090 }, trips);
+    assert.equal(l?.kind, 'less');
+    if (l?.kind === 'less') assert.equal(l.missingKm, 10);
+    // jízda přes kotvu se nepočítá; chybná kotva (tachometr klesl) -> nic
+    assert.equal(reconcileOdometer(a, { atMs: 10 * H, km: 9000 }, trips), null);
+  }],
+  ['kniha jízd: průběžný tachometr a souhrn s náhradou', () => {
+    const odo = runningOdometer(
+      [{ atMs: 0, km: 1000 }, { atMs: 100, km: 1200 }],
+      [{ startMs: 50, endMs: 60, km: 20.4 }, { startMs: 10, endMs: 20, km: 30 }, { startMs: 150, endMs: 160, km: 5 }, { startMs: -10, endMs: -5, km: 7 }]
+    );
+    assert.deepEqual(odo, [1050, 1030, 1205, null]);
+    const sum = logbookSummary([{ km: 30, isPrivate: false }, { km: 10, isPrivate: true }, { km: 20, isPrivate: false }], 5);
+    assert.equal(sum.businessKm, 50);
+    assert.equal(sum.privateKm, 10);
+    assert.equal(Math.round(sum.businessPct ?? 0), 83);
+    assert.equal(sum.allowanceKc, 250);
+    assert.equal(logbookSummary([], 0).allowanceKc, null);
   }],
 ];
 
