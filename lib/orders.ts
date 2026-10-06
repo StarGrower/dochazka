@@ -104,31 +104,156 @@ export async function saveOrder(id: number | null, f: OrderFields): Promise<numb
     );
     orderId = r.lastInsertRowId;
   }
+  const before = id ? new Set((await db.getAllAsync<{ place_id: number }>('SELECT place_id FROM order_places WHERE order_id = ?', [orderId])).map((r) => r.place_id)) : new Set<number>();
   await db.runAsync('DELETE FROM order_places WHERE order_id = ?', [orderId]);
   for (const placeId of f.placeIds) await db.runAsync('INSERT OR IGNORE INTO order_places (order_id, place_id) VALUES (?, ?)', [orderId, placeId]);
-  // Změna míst/období -> nevyfakturované automatické přiřazení znovu.
-  await db.runAsync('UPDATE day_work_records SET order_id = NULL WHERE order_id = ? AND invoice_batch_id IS NULL', [orderId]);
-  await db.runAsync('UPDATE trips SET order_id = NULL WHERE order_id = ? AND invoice_batch_id IS NULL', [orderId]);
-  await assignOrdersAuto();
+  // Změna míst/období -> nevyfakturovaná AUTOMATICKÁ přiřazení této zakázky
+  // znovu (ruční volba se nemění). Dřívější práce na NOVĚ přidaných místech
+  // se nepřiřadí sama - nabídne se (pendingForNewPlaces + assignEarlierWork).
+  await db.runAsync('UPDATE day_work_records SET order_id = NULL WHERE order_id = ? AND invoice_batch_id IS NULL AND order_manual = 0', [orderId]);
+  await db.runAsync('UPDATE trips SET order_id = NULL WHERE order_id = ? AND invoice_batch_id IS NULL AND order_manual = 0', [orderId]);
+  const added = f.placeIds.filter((p) => !before.has(p));
+  await assignOrdersAuto(null, null, added);
   return orderId;
+}
+
+// Dřívější nepřiřazená práce na místech zakázky (v jejím období), kterou
+// automatika nepřiřadila - nabídka po přidání místa. Bez ruční volby a
+// bez vyfakturovaných (ty se nepřeřazují).
+export async function earlierWorkOnPlaces(orderId: number, placeIds: number[]): Promise<{ recordIds: number[]; tripIds: number[]; invoicedElsewhere: number }> {
+  if (placeIds.length === 0) return { recordIds: [], tripIds: [], invoicedElsewhere: 0 };
+  const db = await getDb();
+  const order = await getOrder(orderId);
+  if (!order) return { recordIds: [], tripIds: [], invoicedElsewhere: 0 };
+  const ph = placeIds.map(() => '?').join(', ');
+  const range = `${order.dateFrom ? ' AND date >= ?' : ''}${order.dateTo ? ' AND date <= ?' : ''}`;
+  const rangeParams = [order.dateFrom, order.dateTo].filter((x): x is string => !!x);
+  const records = await db.getAllAsync<{ id: number }>(
+    `SELECT id FROM day_work_records WHERE place_id IN (${ph}) AND order_id IS NULL AND order_manual = 0 AND invoice_batch_id IS NULL${range}`,
+    [...placeIds, ...rangeParams]
+  );
+  const invoiced = await db.getFirstAsync<{ c: number }>(
+    `SELECT COUNT(*) as c FROM day_work_records WHERE place_id IN (${ph}) AND invoice_batch_id IS NOT NULL AND (order_id IS NULL OR order_id <> ?)${range}`,
+    [...placeIds, orderId, ...rangeParams]
+  );
+  const trips = (
+    await db.getAllAsync<{ id: number; start_at: string }>(
+      `SELECT id, start_at FROM trips WHERE (to_place_id IN (${ph}) OR from_place_id IN (${ph})) AND order_id IS NULL AND order_manual = 0
+         AND invoice_batch_id IS NULL AND is_deleted = 0 AND is_private = 0`,
+      [...placeIds, ...placeIds]
+    )
+  ).filter((t) => {
+    const d = toIsoDate(new Date(t.start_at));
+    return (!order.dateFrom || d >= order.dateFrom) && (!order.dateTo || d <= order.dateTo);
+  });
+  return { recordIds: records.map((r) => r.id), tripIds: trips.map((t) => t.id), invoicedElsewhere: invoiced?.c ?? 0 };
+}
+
+// Ano = přiřadit (automaticky, takže se při změně míst přepočítá);
+// Ne = nechat "bez zakázky" ručně, ať je automatika později nepřiřadí.
+export async function resolveEarlierWork(orderId: number, ids: { recordIds: number[]; tripIds: number[] }, assign: boolean): Promise<void> {
+  const db = await getDb();
+  const [order, manual] = assign ? [orderId, 0] : [-1, 1];
+  for (const id of ids.recordIds) await db.runAsync('UPDATE day_work_records SET order_id = ?, order_manual = ? WHERE id = ? AND invoice_batch_id IS NULL', [order, manual, id]);
+  for (const id of ids.tripIds) await db.runAsync('UPDATE trips SET order_id = ?, order_manual = ? WHERE id = ? AND invoice_batch_id IS NULL', [order, manual, id]);
 }
 
 export async function deleteOrder(id: number): Promise<void> {
   const db = await getDb();
   await db.runAsync('UPDATE orders SET is_deleted = 1, updated_at = ? WHERE id = ?', [new Date().toISOString(), id]);
-  await db.runAsync('UPDATE day_work_records SET order_id = NULL WHERE order_id = ? AND invoice_batch_id IS NULL', [id]);
-  await db.runAsync('UPDATE trips SET order_id = NULL WHERE order_id = ? AND invoice_batch_id IS NULL', [id]);
+  // Smazaná zakázka: nevyfakturovaná práce je zase nepřiřazená (i ruční volba).
+  await db.runAsync('UPDATE day_work_records SET order_id = NULL, order_manual = 0 WHERE order_id = ? AND invoice_batch_id IS NULL', [id]);
+  await db.runAsync('UPDATE trips SET order_id = NULL, order_manual = 0 WHERE order_id = ? AND invoice_batch_id IS NULL', [id]);
 }
 
 // Ruční přeřazení (orderId -1 = "bez zakázky", null = vrátit automatice).
+// Vyfakturovanou položku nejde přeřadit (WHERE invoice_batch_id IS NULL).
 export async function setRecordOrder(recordId: number, orderId: number | null): Promise<void> {
   const db = await getDb();
-  await db.runAsync('UPDATE day_work_records SET order_id = ? WHERE id = ? AND invoice_batch_id IS NULL', [orderId, recordId]);
+  await db.runAsync('UPDATE day_work_records SET order_id = ?, order_manual = ? WHERE id = ? AND invoice_batch_id IS NULL', [orderId, orderId === null ? 0 : 1, recordId]);
 }
 
 export async function setTripOrder(tripId: number, orderId: number | null): Promise<void> {
   const db = await getDb();
-  await db.runAsync('UPDATE trips SET order_id = ? WHERE id = ? AND invoice_batch_id IS NULL', [orderId, tripId]);
+  await db.runAsync('UPDATE trips SET order_id = ?, order_manual = ? WHERE id = ? AND invoice_batch_id IS NULL', [orderId, orderId === null ? 0 : 1, tripId]);
+}
+
+// Kam by položka spadla automaticky (štítek "Automaticky podle místa → X").
+export function autoOrderFor(orders: Order[], placeId: number | null, date: string): Order | null {
+  const id = orderFor(orders.filter((o) => o.placeIds.length > 0), placeId, date);
+  return orders.find((o) => o.id === id) ?? null;
+}
+
+// --- hromadné přiřazení (detail zakázky → Přidat nepřiřazenou práci) ---
+
+export interface UnassignedRecord {
+  id: number;
+  date: string;
+  categoryName: string;
+  quantity: number;
+  unit: 'hour' | 'day' | 'km';
+  amountKc: number;
+  placeId: number | null;
+  workerId: number;
+  manualNone: boolean; // ručně "bez zakázky"
+}
+
+// Nepřiřazená = bez zakázky (automaticky i ručně) a nevyfakturovaná.
+export async function listUnassignedRecords(): Promise<UnassignedRecord[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ id: number; date: string; name: string; quantity: number; unit: 'hour' | 'day' | 'km'; rate_kc: number; surcharge_pct: number; place_id: number | null; worker_id: number; order_id: number | null }>(
+    `SELECT r.id, r.date, c.name, r.quantity, r.unit, r.rate_kc, r.surcharge_pct, r.place_id, r.worker_id, r.order_id
+     FROM day_work_records r JOIN work_categories c ON c.id = r.category_id
+     WHERE (r.order_id IS NULL OR r.order_id = -1 OR r.order_id IN (SELECT id FROM orders WHERE is_deleted = 1)) AND r.invoice_batch_id IS NULL
+     ORDER BY r.date DESC, r.id`
+  );
+  return rows.map((r) => ({
+    id: r.id, date: r.date, categoryName: r.name, quantity: r.quantity, unit: r.unit, amountKc: r.quantity * r.rate_kc * (1 + r.surcharge_pct / 100),
+    placeId: r.place_id, workerId: r.worker_id, manualNone: r.order_id === -1,
+  }));
+}
+
+export interface UnassignedTrip {
+  id: number;
+  startAt: string;
+  km: number;
+  fromPlaceId: number | null;
+  toPlaceId: number | null;
+  driverId: number;
+}
+
+export async function listUnassignedTrips(): Promise<UnassignedTrip[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ id: number; start_at: string; distance_m: number; road_distance_m: number | null; km_override: number | null; from_place_id: number | null; to_place_id: number | null; driver_id: number }>(
+    `SELECT id, start_at, distance_m, road_distance_m, km_override, from_place_id, to_place_id, driver_id FROM trips
+     WHERE is_deleted = 0 AND is_private = 0 AND invoice_batch_id IS NULL
+       AND (order_id IS NULL OR order_id = -1 OR order_id IN (SELECT id FROM orders WHERE is_deleted = 1))
+     ORDER BY start_at DESC`
+  );
+  return rows.map((t) => ({
+    id: t.id, startAt: t.start_at, km: tripKm({ kmOverride: t.km_override, distanceM: t.distance_m, roadDistanceM: t.road_distance_m }),
+    fromPlaceId: t.from_place_id, toPlaceId: t.to_place_id, driverId: t.driver_id,
+  }));
+}
+
+// Výdaje patří vždy zakázce - "nepřiřazené" = výdaje smazaných zakázek.
+export async function listOrphanExpenses(): Promise<(OrderExpense & { orderName: string })[]> {
+  const db = await getDb();
+  return db.getAllAsync(
+    `SELECT e.id, e.order_id as orderId, e.date, e.amount_kc as amountKc, e.description, e.category, e.invoice_batch_id as invoiceBatchId, o.name as orderName
+     FROM order_expenses e JOIN orders o ON o.id = e.order_id
+     WHERE e.is_deleted = 0 AND e.invoice_batch_id IS NULL AND o.is_deleted = 1 ORDER BY e.date DESC`
+  );
+}
+
+// Hromadně a ručně (automatika je pak nezmění). Vyfakturované se přeskočí.
+export async function assignToOrder(orderId: number, ids: { recordIds: number[]; tripIds: number[]; expenseIds: number[] }): Promise<void> {
+  const db = await getDb();
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    for (const id of ids.recordIds) await txn.runAsync('UPDATE day_work_records SET order_id = ?, order_manual = 1 WHERE id = ? AND invoice_batch_id IS NULL', [orderId, id]);
+    for (const id of ids.tripIds) await txn.runAsync('UPDATE trips SET order_id = ?, order_manual = 1 WHERE id = ? AND invoice_batch_id IS NULL', [orderId, id]);
+    for (const id of ids.expenseIds) await txn.runAsync('UPDATE order_expenses SET order_id = ? WHERE id = ? AND invoice_batch_id IS NULL', [orderId, id]);
+  });
 }
 
 // --- automatické přiřazení ---
@@ -143,7 +268,9 @@ function orderFor(orders: Order[], placeId: number | null, date: string): number
 }
 
 // Přiřadí nepřiřazené zápisy a přejezdy (rozsah dnů, null = vše).
-export async function assignOrdersAuto(fromDate: string | null = null, toDate: string | null = null): Promise<void> {
+// `skipPlaceIds` - právě přidaná místa zakázky: jejich dřívější práce se
+// nepřiřadí sama, nabídne se (earlierWorkOnPlaces).
+export async function assignOrdersAuto(fromDate: string | null = null, toDate: string | null = null, skipPlaceIds: number[] = []): Promise<void> {
   const db = await getDb();
   const orders = (await listOrders()).filter((o) => o.placeIds.length > 0);
   if (orders.length === 0) return;
@@ -158,11 +285,13 @@ export async function assignOrdersAuto(fromDate: string | null = null, toDate: s
   const range = 'AND date >= ? AND date <= ?';
   const rangeParams = [fromDate, toDate];
   const records = await db.getAllAsync<{ id: number; date: string; place_id: number | null; worker_id: number }>(
-    `SELECT id, date, place_id, worker_id FROM day_work_records WHERE order_id IS NULL AND invoice_batch_id IS NULL ${range}`,
+    `SELECT id, date, place_id, worker_id FROM day_work_records WHERE order_id IS NULL AND order_manual = 0 AND invoice_batch_id IS NULL ${range}`,
     rangeParams
   );
   const dayCandidates = new Map<string, number | null>(); // den -> jediná zakázka podle pobytů
+  const today = toIsoDate(new Date());
   for (const r of records) {
+    if (r.place_id !== null && skipPlaceIds.includes(r.place_id) && r.date < today) continue;
     let orderId = orderFor(orders, r.place_id, r.date);
     // Zápis bez místa podle MÝCH pobytů jen u mojí práce (kolega mohl být jinde).
     if (orderId === null && r.place_id === null && r.worker_id === ME_ID) {
@@ -177,11 +306,12 @@ export async function assignOrdersAuto(fromDate: string | null = null, toDate: s
   }
 
   const trips = await db.getAllAsync<{ id: number; start_at: string; to_place_id: number | null; from_place_id: number | null }>(
-    "SELECT id, start_at, to_place_id, from_place_id FROM trips WHERE order_id IS NULL AND invoice_batch_id IS NULL AND is_deleted = 0 AND is_private = 0"
+    "SELECT id, start_at, to_place_id, from_place_id FROM trips WHERE order_id IS NULL AND order_manual = 0 AND invoice_batch_id IS NULL AND is_deleted = 0 AND is_private = 0"
   );
   for (const t of trips) {
     const date = toIsoDate(new Date(t.start_at));
     if (date < fromDate || date > toDate) continue;
+    if (date < today && [t.to_place_id, t.from_place_id].some((p) => p !== null && skipPlaceIds.includes(p))) continue;
     const orderId = orderFor(orders, t.to_place_id, date) ?? orderFor(orders, t.from_place_id, date);
     if (orderId !== null) await db.runAsync('UPDATE trips SET order_id = ? WHERE id = ?', [orderId, t.id]);
   }

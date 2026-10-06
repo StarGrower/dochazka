@@ -1,5 +1,7 @@
 // Výběr zakázky u položky práce / přejezdu (etapa 5 - ruční přeřazení).
-// value: null = automaticky, -1 = bez zakázky, jinak id zakázky.
+// value: null = automaticky podle místa, -1 = ručně bez zakázky, jinak
+// ručně vybraná zakázka (migrace v7 order_manual - automatika ji nemění).
+// Zobrazuje se vždy - i u položky bez místa a bez založených zakázek.
 
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
@@ -15,19 +17,25 @@ export default function OrderPicker({
   value,
   onChange,
   locked,
+  autoName,
 }: {
   orders: OrderOption[];
   value: number | null;
   onChange: (v: number | null) => void;
-  locked: boolean; // vyfakturováno - už nejde měnit
+  locked: boolean; // vyfakturováno - nejde přeřadit
+  autoName?: string | null; // kam by položka spadla automaticky (null = nikam)
 }) {
-  if (orders.length === 0) return null;
   const name = orders.find((o) => o.id === value)?.name;
   if (locked) {
-    return <Text style={styles.locked}>Zakázka: {name ?? 'bez zakázky'} · vyfakturováno, nejde změnit</Text>;
+    return (
+      <View>
+        <Text style={styles.label}>ZAKÁZKA</Text>
+        <Text style={styles.locked}>{name ?? autoName ?? 'bez zakázky'} · vyfakturováno - přeřadit nejde (nejdřív zruš podklad k faktuře)</Text>
+      </View>
+    );
   }
   const options: { id: number | null; label: string }[] = [
-    { id: null, label: 'Automaticky' },
+    { id: null, label: `Automaticky podle místa${autoName ? ` → ${autoName}` : ' (žádná)'}` },
     ...orders.map((o) => ({ id: o.id, label: o.name })),
     { id: -1, label: 'Bez zakázky' },
   ];
@@ -44,6 +52,8 @@ export default function OrderPicker({
           );
         })}
       </View>
+      {orders.length === 0 && <Text style={styles.locked}>Zatím žádné zakázky - založíš je v záložce Zakázky.</Text>}
+      {value !== null && <Text style={styles.locked}>Ruční volba - změna míst zakázky ji nezmění.</Text>}
     </View>
   );
 }
@@ -55,5 +65,5 @@ const styles = StyleSheet.create({
   chipOn: { backgroundColor: colors.accent, borderColor: colors.accent },
   chipText: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(13) },
   chipTextOn: { color: colors.onAccent },
-  locked: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginTop: 10 },
+  locked: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginTop: 8 },
 });

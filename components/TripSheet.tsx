@@ -18,7 +18,7 @@ export interface TripEdit {
   kmOverride: number | null;
   isPrivate: boolean;
   vehicleCategoryId: number | null;
-  orderId: number | null; // etapa 5: null = automaticky, -1 = bez zakázky
+  orderId: number | null; // etapa 5: null = automaticky, -1 = bez zakázky, jinak ručně (v7)
 }
 
 interface TripSheetProps {
@@ -33,6 +33,7 @@ interface TripSheetProps {
   onDiscardRoute: (trip: Trip) => void;
   onDelete: (trip: Trip) => void;
   orders?: OrderOption[];
+  autoOrderName?: string | null; // kam by přejezd spadl automaticky
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -49,6 +50,7 @@ export default function TripSheet({
   onDiscardRoute,
   onDelete,
   orders = [],
+  autoOrderName = null,
 }: TripSheetProps) {
   const [orderId, setOrderId] = useState<number | null>(null);
   const [km, setKm] = useState(0);
@@ -61,7 +63,7 @@ export default function TripSheet({
     setKm(round1(tripKm(trip)));
     setIsPrivate(trip.isPrivate);
     setVehicleId(trip.vehicleCategoryId ?? defaultVehicleId);
-    setOrderId(trip.orderId);
+    setOrderId(trip.orderManual ? trip.orderId : null);
   }, [trip, defaultVehicleId]);
 
   if (!trip) return <BottomSheetModal visible={false} onClose={onClose}>{null}</BottomSheetModal>;
@@ -125,7 +127,7 @@ export default function TripSheet({
         </View>
         {vehicles.length === 0 && <Text style={styles.hint}>Žádný stroj - přidej ho v Nastavení → Stroje a kategorie.</Text>}
 
-        <OrderPicker orders={orders} value={orderId} onChange={setOrderId} locked={trip.invoiceBatchId !== null} />
+        <OrderPicker orders={orders} value={orderId} onChange={setOrderId} locked={trip.invoiceBatchId !== null} autoName={autoOrderName} />
 
         {added ? (
           <Text style={styles.addedText}>Km tohoto přejezdu jsou už v Práci a strojích.</Text>

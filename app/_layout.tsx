@@ -149,6 +149,7 @@ export default function RootLayout() {
             <Stack.Screen name="settings/pracovnici" />
             <Stack.Screen name="order/[id]" />
             <Stack.Screen name="order/edit" />
+            <Stack.Screen name="order/assign" />
             <Stack.Screen name="machine/[id]" />
             <Stack.Screen name="machine/edit" />
             <Stack.Screen name="fuel/edit" />

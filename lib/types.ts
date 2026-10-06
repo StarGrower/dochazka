@@ -36,6 +36,7 @@ export interface DayWorkRecord {
   categoryId: number;
   placeId: number | null; // místo, ke kterému zápis patří (zápis pobytu, etapa 4)
   orderId: number | null; // zakázka (etapa 5): null = nepřiřazeno, -1 = ručně bez zakázky
+  orderManual: boolean; // migrace v7: ruční volba zakázky - automatika ji nikdy nemění
   invoiceBatchId: number | null; // podklad k faktuře, ve kterém je položka vyúčtovaná
   quantity: number; // v jednotce `unit`
   unit: RateUnit;
@@ -147,6 +148,7 @@ export interface Trip {
   isDeleted: boolean;
   // etapa 5
   orderId: number | null;
+  orderManual: boolean; // migrace v7
   invoiceBatchId: number | null;
   // etapa 7 - kniha jízd
   purpose: string;

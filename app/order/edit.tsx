@@ -12,7 +12,7 @@ import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import { ORDER_STATUS_LABEL } from '@/components/OrderBadge';
 import ScreenHeader from '@/components/ScreenHeader';
 import { toIsoDate } from '@/lib/format';
-import { deleteOrder, getOrder, listClients, saveClient, saveOrder, workPlaces } from '@/lib/orders';
+import { deleteOrder, earlierWorkOnPlaces, getOrder, listClients, resolveEarlierWork, saveClient, saveOrder, workPlaces } from '@/lib/orders';
 import type { Client, OrderPriceMode, OrderStatus, Place } from '@/lib/types';
 import { colors, fonts, fs, MIN_TOUCH, radii } from '@/theme';
 
@@ -97,6 +97,7 @@ export default function OrderEditScreen() {
     }
     let finalClientId = clientId;
     if (newClient && newClient.name.trim()) finalClientId = await saveClient({ ...newClient, name: newClient.name.trim() });
+    const original = orderId ? ((await getOrder(orderId))?.placeIds ?? []) : [];
     const savedId = await saveOrder(orderId, {
       name: name.trim(),
       clientId: finalClientId,
@@ -109,8 +110,42 @@ export default function OrderEditScreen() {
       note: note.trim(),
       placeIds,
     });
-    if (orderId) router.back();
-    else router.replace(`/order/${savedId}`);
+    const leave = () => (orderId ? router.back() : router.replace(`/order/${savedId}`));
+    // Nově přidané místo -> nabídnout dřívější práci na něm (nic samo).
+    const added = placeIds.filter((p) => !original.includes(p));
+    const earlier = await earlierWorkOnPlaces(savedId, added);
+    const count = earlier.recordIds.length + earlier.tripIds.length;
+    if (count === 0) {
+      leave();
+      return;
+    }
+    const parts = [
+      earlier.recordIds.length ? `${earlier.recordIds.length} položek` : null,
+      earlier.tripIds.length ? `${earlier.tripIds.length} přejezdů` : null,
+    ].filter(Boolean);
+    Alert.alert(
+      'Dřívější práce na místě',
+      `Přiřadit i dřívější práci na ${added.length > 1 ? 'těchto místech' : 'tomto místě'} (${parts.join(', ')})?${
+        earlier.invoicedElsewhere ? `\n\n${earlier.invoicedElsewhere} položek je vyfakturovaných jinde - ty se nepřeřadí.` : ''
+      }\n\nPoložky s ruční volbou jiné zakázky se nemění.`,
+      [
+        {
+          text: 'Ne, nechat bez zakázky',
+          style: 'cancel',
+          onPress: async () => {
+            await resolveEarlierWork(savedId, earlier, false);
+            leave();
+          },
+        },
+        {
+          text: 'Přiřadit',
+          onPress: async () => {
+            await resolveEarlierWork(savedId, earlier, true);
+            leave();
+          },
+        },
+      ]
+    );
   };
 
   const handleDelete = () => {

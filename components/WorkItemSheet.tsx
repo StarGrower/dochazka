@@ -54,6 +54,7 @@ interface WorkItemSheetProps {
   people: Person[];
   onPlaceCreated: (place: Place) => void;
   onPeopleChanged: () => void;
+  autoOrderName: (placeId: number | null, workerId: number) => string | null; // kam by položka spadla automaticky
 }
 
 const UNITS: RateUnit[] = ['hour', 'day', 'km'];
@@ -83,6 +84,7 @@ export default function WorkItemSheet({
   people,
   onPlaceCreated,
   onPeopleChanged,
+  autoOrderName,
 }: WorkItemSheetProps) {
   const [orderId, setOrderId] = useState<number | null>(null);
   const [category, setCategory] = useState<WorkCategory | null>(null);
@@ -102,7 +104,8 @@ export default function WorkItemSheet({
       setCategory(categoryById.get(mode.record.categoryId) ?? null);
       setUnit(mode.record.unit);
       setQuantity(mode.record.quantity);
-      setOrderId(mode.record.orderId);
+      // automaticky přiřazená zakázka = volba "Automaticky", ruční = ta zakázka
+      setOrderId(mode.record.orderManual ? mode.record.orderId : null);
       setPlaceId(mode.record.placeId);
       setWorkerId(mode.record.workerId);
       setTimeFrom(mode.record.timeFrom ?? '');
@@ -167,6 +170,8 @@ export default function WorkItemSheet({
 
   const renderAssignment = (locked: boolean) => (
     <>
+      <OrderPicker orders={orders} value={orderId} onChange={setOrderId} locked={locked} autoName={autoOrderName(placeId, workerId)} />
+
       <Text style={styles.label}>MÍSTO</Text>
       <TouchableOpacity style={styles.selector} onPress={() => setPickingPlace(true)}>
         <Text style={styles.selectorText} numberOfLines={1}>
@@ -187,8 +192,6 @@ export default function WorkItemSheet({
         </TouchableOpacity>
       </View>
       {worker && !worker.billable && <Text style={styles.hint}>{worker.name}: jen evidence hodin, 0 Kč.</Text>}
-
-      <OrderPicker orders={orders} value={orderId} onChange={setOrderId} locked={locked} />
 
       <Text style={styles.label}>ČAS (VOLITELNĚ)</Text>
       <View style={styles.timeRow}>

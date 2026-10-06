@@ -66,9 +66,9 @@ import {
 import { geocodeKey, nearLocalityLabel, resolveLocalities } from '@/lib/geocode';
 import { holidayName, isWeekend } from '@/lib/holidays';
 import { tripKm } from '@/lib/tripPlan';
-import { ME_ID, type AppSettings, type DayWorkRecordWithCategory, type Person, type Place, type RateUnit, type RoutePoint, type Trip, type VisitWithPlace, type WorkCategory } from '@/lib/types';
+import { ME_ID, type AppSettings, type Order, type DayWorkRecordWithCategory, type Person, type Place, type RateUnit, type RoutePoint, type Trip, type VisitWithPlace, type WorkCategory } from '@/lib/types';
 import { defectWarningFor } from '@/lib/machines';
-import { assignOrdersAuto, listOrders, listPeople, setRecordOrder, setTripOrder } from '@/lib/orders';
+import { assignOrdersAuto, autoOrderFor, listOrders, listPeople, setRecordOrder, setTripOrder } from '@/lib/orders';
 import { evaluateRemindersSafe, proposalForStay, workStaysForDate } from '@/lib/reminders';
 import { formatDurationHM } from '@/lib/stayProposal';
 import { refreshTrips } from '@/lib/visits';
@@ -147,6 +147,7 @@ export default function DayDetailScreen() {
   const [staySheetTarget, setStaySheetTarget] = useState<StaySheetTarget | null>(null);
   const [stayParamDone, setStayParamDone] = useState(false);
   const [orderOptions, setOrderOptions] = useState<{ id: number; name: string }[]>([]);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [places, setPlaces] = useState<Place[]>([]);
 
@@ -154,7 +155,9 @@ export default function DayDetailScreen() {
     if (!date) return;
     // Etapa 5: nepřiřazené zápisy a přejezdy dne -> zakázky podle míst.
     await assignOrdersAuto(date, date).catch(() => {});
-    setOrderOptions((await listOrders()).filter((o) => o.status !== 'paid').map((o) => ({ id: o.id, name: o.name })));
+    const ordersList = await listOrders();
+    setAllOrders(ordersList);
+    setOrderOptions(ordersList.filter((o) => o.status !== 'paid').map((o) => ({ id: o.id, name: o.name })));
     setPeople(await listPeople());
     setPlaces(await listPlaces());
     const [s, r, n, c, v, t] = await Promise.all([
@@ -316,7 +319,9 @@ export default function DayDetailScreen() {
     }
     await updateDayRecord(record.id, { quantity, unit, rateKc, surchargePct, placeId: a.placeId, workerId: a.workerId, timeFrom: a.timeFrom, timeTo: a.timeTo });
     if (!invoiced) {
-      if (a.orderId !== record.orderId) await setRecordOrder(record.id, a.orderId);
+      // volba v panelu: null = automaticky, jinak ruční (migrace v7)
+      const before = record.orderManual ? record.orderId : null;
+      if (a.orderId !== before) await setRecordOrder(record.id, a.orderId);
       // Jiné místo a zakázka nechaná být -> znovu automaticky podle místa.
       else if (a.placeId !== record.placeId) await setRecordOrder(record.id, null);
     }
@@ -456,7 +461,7 @@ export default function DayDetailScreen() {
 
   const saveTripEdit = async (trip: Trip, edit: TripEdit) => {
     await updateTripUserFields(trip.id, edit);
-    if (edit.orderId !== trip.orderId) await setTripOrder(trip.id, edit.orderId);
+    if (edit.orderId !== (trip.orderManual ? trip.orderId : null)) await setTripOrder(trip.id, edit.orderId);
   };
 
   const handleSaveTrip = async (trip: Trip, edit: TripEdit) => {
@@ -649,6 +654,16 @@ export default function DayDetailScreen() {
       })
     : records.map((r) => ({ kind: 'record' as const, key: String(r.id), record: r }));
   const dayPlaceIds = [...new Set(visits.filter((v) => v.placeId !== null && !v.placeIsPrivate).map((v) => v.placeId as number))];
+  // Kam by položka spadla automaticky: podle místa; bez místa podle mých
+  // pobytů (jen moje práce, jen když dnešní pobyty patří jediné zakázce).
+  const autoOrderName = (placeId: number | null, workerId: number): string | null => {
+    if (placeId !== null) return autoOrderFor(allOrders, placeId, date)?.name ?? null;
+    if (workerId !== ME_ID) return null;
+    const names = new Set(dayPlaceIds.map((p) => autoOrderFor(allOrders, p, date)?.name).filter((n): n is string => !!n));
+    return names.size === 1 ? [...names][0] : null;
+  };
+  const orderLabel = (orderId: number | null): string | null =>
+    orderId !== null && orderId > 0 ? (allOrders.find((o) => o.id === orderId)?.name ?? null) : null;
 
   if (!date || !settings) return null;
 
@@ -733,6 +748,7 @@ export default function DayDetailScreen() {
                         Přejezd{kmLabel} · {formatDurationMinutes(item.toMs - item.fromMs)}
                         {trip?.isPrivate ? ' · soukromá' : ''}
                         {trip?.workRecordId ? ' · v práci ✓' : ''}
+                        {trip && !trip.isPrivate && allOrders.length > 0 ? ` · ${orderLabel(trip.orderId) ?? 'bez zakázky'}` : ''}
                       </Text>
                       {trip && (
                         <TouchableOpacity onPress={() => setTripEditTarget(trip)} hitSlop={10}>
@@ -833,6 +849,13 @@ export default function DayDetailScreen() {
                   {item.surchargePct > 0 ? ` · +${formatNumberCs(item.surchargePct)} %` : ''}
                   {item.timeFrom && item.timeTo ? ` · ${item.timeFrom}–${item.timeTo}` : ''}
                 </Text>
+                {orderLabel(item.orderId) ? (
+                  <Text style={styles.orderTag} numberOfLines={1}>
+                    {orderLabel(item.orderId)}
+                  </Text>
+                ) : allOrders.length > 0 ? (
+                  <Text style={styles.noOrderTag}>bez zakázky</Text>
+                ) : null}
               </View>
               <Text style={styles.rowQuantity}>{formatKc(recordAmountKc(item))}</Text>
             </TouchableOpacity>
@@ -882,6 +905,7 @@ export default function DayDetailScreen() {
         people={people}
         onPlaceCreated={(place) => setPlaces((list) => [...list, place])}
         onPeopleChanged={async () => setPeople(await listPeople())}
+        autoOrderName={autoOrderName}
       />
 
       <StaySheet
@@ -903,7 +927,7 @@ export default function DayDetailScreen() {
                 kmOverride: tripEditTarget.kmOverride,
                 isPrivate: tripEditTarget.isPrivate,
                 vehicleCategoryId: tripEditTarget.vehicleCategoryId,
-                orderId: tripEditTarget.orderId,
+                orderId: tripEditTarget.orderManual ? tripEditTarget.orderId : null,
               }).reduce((sum, t) => sum + tripKm(t), 0)
             : 0
         }
@@ -913,6 +937,11 @@ export default function DayDetailScreen() {
         onDiscardRoute={handleDiscardRoute}
         onDelete={handleDeleteTrip}
         orders={orderOptions}
+        autoOrderName={
+          tripEditTarget && date
+            ? (autoOrderFor(allOrders, tripEditTarget.toPlaceId, date) ?? autoOrderFor(allOrders, tripEditTarget.fromPlaceId, date))?.name ?? null
+            : null
+        }
       />
 
       <BottomSheetModal visible={visitEditTarget !== null} onClose={() => setVisitEditTarget(null)}>
@@ -1007,6 +1036,19 @@ const styles = StyleSheet.create({
   rowMain: { flex: 1 },
   rowName: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(15) },
   rowWorker: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: fs(13) },
+  orderTag: {
+    alignSelf: 'flex-start',
+    color: '#7FA7C9',
+    fontFamily: fonts.bodySemiBold,
+    fontSize: fs(11),
+    borderWidth: 1,
+    borderColor: '#7FA7C9',
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    marginTop: 3,
+    overflow: 'hidden',
+  },
+  noOrderTag: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(11), fontStyle: 'italic', marginTop: 3 },
   groupHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, marginBottom: 4, gap: 8 },
   groupTitle: { color: colors.textMuted, fontFamily: fonts.headingBold, fontSize: fs(13), letterSpacing: 0.8, flex: 1 },
   groupKc: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12) },

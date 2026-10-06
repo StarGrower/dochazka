@@ -312,6 +312,10 @@ export default function OrderDetailScreen() {
           </>
         )}
 
+        <TouchableOpacity style={styles.assignBtn} onPress={() => router.push(`/order/assign?id=${order.id}`)}>
+          <Text style={styles.assignText}>+ Přidat nepřiřazenou práci</Text>
+        </TouchableOpacity>
+
         <View style={styles.actions}>
           <TouchableOpacity style={styles.secondary} onPress={() => setExportOpen(true)}>
             <Text style={styles.secondaryText}>Export</Text>
@@ -453,6 +457,8 @@ const styles = StyleSheet.create({
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: radii.card, paddingHorizontal: 12, minHeight: 48, color: colors.text, fontFamily: fonts.body, fontSize: fs(16), backgroundColor: colors.background, marginTop: 8 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   workerRow: { gap: 8 },
+  assignBtn: { minHeight: MIN_TOUCH, borderRadius: radii.card, borderWidth: 1, borderColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  assignText: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: fs(14) },
   filterHint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12) },
   chip: { minHeight: MIN_TOUCH, paddingHorizontal: 12, borderRadius: radii.card, borderWidth: 1, borderColor: colors.border, justifyContent: 'center' },
   chipOn: { backgroundColor: colors.accent, borderColor: colors.accent },

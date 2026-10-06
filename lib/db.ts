@@ -220,7 +220,7 @@ async function migrateAddCategoryKind(db: SQLite.SQLiteDatabase): Promise<void> 
 // telefonu se nesmí ztratit". Migrace samy nic fyzicky nemažou (jen
 // is_deleted / přesun do *_removed tabulek).
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 // Záloha se dělá před první čekající migrací; jméno podle verze, ze které
 // se migruje (existující záloha se nikdy nepřepisuje).
 function backupFileName(fromVersion: number): string {
@@ -272,6 +272,10 @@ async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: 
   if (version < 6) {
     await migrateV6Workers(db);
     await db.execAsync('PRAGMA user_version = 6');
+  }
+  if (version < 7) {
+    await migrateV7OrderManual(db);
+    await db.execAsync('PRAGMA user_version = 7');
   }
 }
 
@@ -866,6 +870,18 @@ async function migrateV6Workers(db: SQLite.SQLiteDatabase): Promise<void> {
   `);
 }
 
+// Ruční volba zakázky u položky / přejezdu - automatika (místa a období
+// zakázky) ji nikdy nemění. Dosavadní "bez zakázky" (-1) je ruční volba;
+// ostatní dosavadní přiřazení se zpětně nedají rozlišit -> automatická.
+async function migrateV7OrderManual(db: SQLite.SQLiteDatabase): Promise<void> {
+  await addColumnIfMissing(db, 'day_work_records', 'order_manual', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing(db, 'trips', 'order_manual', 'INTEGER NOT NULL DEFAULT 0');
+  await db.execAsync(`
+    UPDATE day_work_records SET order_manual = 1 WHERE order_id = -1;
+    UPDATE trips SET order_manual = 1 WHERE order_id = -1;
+  `);
+}
+
 // Vestavěné šablony strojů (etapa 6) s výchozím servisním plánem -
 // intervaly jsou obvyklé hodnoty, u každého stroje jdou upravit.
 const BUILTIN_TEMPLATES: { name: string; kind: string; counterUnit: string; plan: { name: string; value?: number; days?: number }[] }[] = [
@@ -1045,6 +1061,7 @@ interface DayWorkRecordRow {
   order_id: number | null;
   invoice_batch_id: number | null;
   worker_id: number | null;
+  order_manual: number | null;
   time_from: string | null;
   time_to: string | null;
   category_name: string;
@@ -1059,6 +1076,7 @@ function mapDayWorkRecord(row: DayWorkRecordRow): DayWorkRecordWithCategory {
     categoryId: row.category_id,
     placeId: row.place_id,
     orderId: row.order_id,
+    orderManual: row.order_manual === 1,
     invoiceBatchId: row.invoice_batch_id,
     quantity: row.quantity,
     unit: row.unit,
@@ -1078,7 +1096,7 @@ export async function getDayRecords(date: string): Promise<DayWorkRecordWithCate
   const db = await getDb();
   const rows = await db.getAllAsync<DayWorkRecordRow>(
     `SELECT r.id, r.date, r.category_id, r.quantity, r.unit, r.rate_kc, r.surcharge_pct, r.source, r.place_id, r.order_id, r.invoice_batch_id,
-            r.worker_id, r.time_from, r.time_to, c.name as category_name, c.is_deleted, c.color
+            r.worker_id, r.order_manual, r.time_from, r.time_to, c.name as category_name, c.is_deleted, c.color
      FROM day_work_records r
      JOIN work_categories c ON c.id = r.category_id
      WHERE r.date = ?
@@ -1107,10 +1125,10 @@ export async function addDayRecord(record: {
 }): Promise<number> {
   const db = await getDb();
   const result = await db.runAsync(
-    `INSERT INTO day_work_records (date, category_id, quantity, unit, rate_kc, surcharge_pct, source, trip_id, place_id, order_id, worker_id, time_from, time_to)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO day_work_records (date, category_id, quantity, unit, rate_kc, surcharge_pct, source, trip_id, place_id, order_id, order_manual, worker_id, time_from, time_to)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [record.date, record.categoryId, record.quantity, record.unit, record.rateKc, record.surchargePct, record.source, record.tripId ?? null, record.placeId ?? null,
-      record.orderId ?? null, record.workerId ?? 1, record.timeFrom ?? null, record.timeTo ?? null]
+      record.orderId ?? null, record.orderId != null ? 1 : 0, record.workerId ?? 1, record.timeFrom ?? null, record.timeTo ?? null]
   );
   return result.lastInsertRowId;
 }
@@ -1678,6 +1696,7 @@ interface TripRow {
   is_deleted: number;
   deleted_by: string | null;
   order_id: number | null;
+  order_manual: number | null;
   invoice_batch_id: number | null;
   purpose: string | null;
   driver_id: number | null;
@@ -1720,6 +1739,7 @@ function mapTrip(row: TripRow): TripWithState {
     userEdited: row.user_edited === 1,
     deletedBy: row.deleted_by,
     orderId: row.order_id ?? null,
+    orderManual: row.order_manual === 1,
     invoiceBatchId: row.invoice_batch_id ?? null,
     purpose: row.purpose ?? '',
     driverId: row.driver_id ?? 1,

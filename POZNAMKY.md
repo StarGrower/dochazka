@@ -12,7 +12,7 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Test v terénu proběhl 2.-4. 10. 2026.**
 **Oprava 2 (po terénním testu etapy 2) - HOTOVO (skupiny A-F), build OVĚŘEN (run 37210061504, 13m21s, všechny kroky zelené vč. Swift modulu, `.ipa` ~15 MB). Čeká na test v telefonu - viz "Co otestovat v telefonu (oprava 2)".**
 
-**Etapy 5-7 (zakázky, stroje, kniha jízd) + opravy po testu 5. 10. + zaokrouhlení / neznámá místa - HOTOVO jako jeden build (commit po každé etapě), viz sekce "Etapy 5-7" níž. Build OVĚŘEN (run 37425246274, 10m10s, vše zelené vč. Swift modulu, `.ipa` ~16,6 MB). Doplněk "práce mimo moje pobyty" (migrace v6) - build OVĚŘEN (run 37493427755, 18m36s, vše zelené vč. Swift modulu, `.ipa` ~16,6 MB). Čeká na test.**
+**Etapy 5-7 (zakázky, stroje, kniha jízd) + opravy po testu 5. 10. + zaokrouhlení / neznámá místa - HOTOVO jako jeden build (commit po každé etapě), viz sekce "Etapy 5-7" níž. Build OVĚŘEN (run 37425246274, 10m10s, vše zelené vč. Swift modulu, `.ipa` ~16,6 MB). Doplněk "práce mimo moje pobyty" (migrace v6) - build OVĚŘEN (run 37493427755, 18m36s, vše zelené vč. Swift modulu, `.ipa` ~16,6 MB). Oprava přiřazení k zakázce (migrace v7) - build čeká.**
 **Etapa 4 (záloha, stav záznamu, připomenutí, výkaz pro šéfa) - HOTOVO, build OVĚŘEN (run 37242592887, 16m52s, vše zelené vč. Swift modulu dochazka-native, `.ipa` ~15,8 MB). Čeká na test - viz "Etapa 4 - co testovat".**
 **Plán etap 4-8: `PLAN_DALSI_ETAPY.md` (jen lokálně, v `.gitignore`), grafické předlohy v `private/` (predloha-pripominka.html, predloha-zakazky.html).**
 **Etapa 3 (přejezdy, trasy, km, mapa) + ikona, logo a úvodní animace - HOTOVO, build OVĚŘEN (run 37218589500, 15m34s, vše zelené vč. react-native-maps a react-native-svg, `.ipa` ~15 MB). Čeká na test v terénu - viz "Etapa 3 - co testovat v terénu".**
@@ -187,6 +187,30 @@ opakovaně bez chyb, uuid u všech řádků, trigger u nového řádku.
 - **Motohodiny** dál ze všech zápisů stroje bez ohledu na pracovníka.
 - **Nastavení → Pracovníci** (`app/settings/pracovnici.tsx`) - stejný
   seznam jako řidiči v knize jízd.
+
+### Oprava - přiřazení práce k zakázce (migrace v7, HOTOVO)
+
+- **Chyba:** v buildu etap 5-7 nešel panel úpravy položky posouvat (max.
+  80 % výšky) -> pole ZAKÁZKA pod číselníkem nebylo vidět; navíc uložení
+  zakázky vynulovalo i ruční přiřazení (nešlo je odlišit od automatiky).
+- **Migrace v7** (jen přidání; záloha `dochazka-zaloha-pred-etapou-7.db`):
+  `day_work_records.order_manual`, `trips.order_manual` (1 = ruční volba,
+  automatika ji nikdy nemění). Dosavadní "bez zakázky" (-1) = ruční,
+  ostatní dosavadní přiřazení = automatická (zpětně nejdou rozlišit).
+- **Pole ZAKÁZKA** (`components/OrderPicker.tsx`) vždy viditelné u položky
+  (hned pod číselníkem) i přejezdu, i bez místa a bez zakázek:
+  "Automaticky podle místa → X" / zakázka / "Bez zakázky".
+- **Vyfakturovaná položka** (i v jiné zakázce) se nepřeřazuje - jen
+  upozornění (rozhodnutí uživatele); hromadné přiřazení ji nenabízí.
+- **Detail zakázky → "Přidat nepřiřazenou práci"** (`app/order/assign.tsx`):
+  položky / přejezdy / výdaje (výdaje = ze smazaných zakázek, výdaj má
+  zakázku vždy) s filtrem období, místa a pracovníka; přiřazení ručně.
+- **NETRIVIÁLNÍ ROZHODNUTÍ - nové místo zakázky:** dřívější práce na nově
+  přidaném místě se nepřiřadí sama (`assignOrdersAuto(..., skipPlaceIds)`),
+  nabídne se "Přiřadit i dřívější práci (X položek)?". Ano = přiřadit
+  (automaticky); Ne = položky ručně "bez zakázky", ať je automatika při
+  otevření dne nepřiřadí. Ruční volby jiné zakázky a vyfakturované se nemění.
+- **Detail dne:** štítek zakázky u položky a přejezdu, jinak "bez zakázky".
 
 ## Etapa 4 - záloha, stav záznamu, připomenutí, výkaz pro šéfa
 
