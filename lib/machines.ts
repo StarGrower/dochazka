@@ -508,7 +508,7 @@ export function fuelCostOf(e: FuelEntry): number {
 
 // Palivo zakázky (etapa 5): u každého stroje průměrné náklady na palivo na
 // odpracovanou hodinu (vozidlo: na km) × hodiny (km) na zakázce.
-setOrderFuelCostProvider(async (orderId) => {
+setOrderFuelCostProvider(async (orderId, eff) => {
   const db = await getDb();
   const machines = await listMachines();
   let kc = 0;
@@ -523,17 +523,17 @@ setOrderFuelCostProvider(async (orderId) => {
     const litersPer = entries.reduce((s, e) => s + e.liters, 0) / totalUsage;
     let onOrder = 0;
     if (m.counterUnit === 'km') {
-      const trips = await db.getAllAsync<{ distance_m: number; road_distance_m: number | null; km_override: number | null }>(
-        'SELECT distance_m, road_distance_m, km_override FROM trips WHERE order_id = ? AND vehicle_category_id = ? AND is_deleted = 0',
-        [orderId, m.id]
-      );
+      // zakázka přejezdu je dopočtená (migrace v8), ne uložená
+      const trips = (
+        await db.getAllAsync<{ id: number; distance_m: number; road_distance_m: number | null; km_override: number | null }>(
+          'SELECT id, distance_m, road_distance_m, km_override FROM trips WHERE vehicle_category_id = ? AND is_deleted = 0',
+          [m.id]
+        )
+      ).filter((t) => eff.trips.get(t.id) === orderId);
       onOrder = trips.reduce((s, t) => s + tripKm({ kmOverride: t.km_override, distanceM: t.distance_m, roadDistanceM: t.road_distance_m }), 0);
     } else {
-      const row = await db.getFirstAsync<{ h: number | null }>(
-        "SELECT SUM(quantity) as h FROM day_work_records WHERE order_id = ? AND category_id = ? AND unit = 'hour'",
-        [orderId, m.id]
-      );
-      onOrder = row?.h ?? 0;
+      const rows = await db.getAllAsync<{ id: number; quantity: number }>("SELECT id, quantity FROM day_work_records WHERE category_id = ? AND unit = 'hour'", [m.id]);
+      onOrder = rows.filter((r) => eff.records.get(r.id) === orderId).reduce((sum, r) => sum + r.quantity, 0);
     }
     kc += onOrder * costPer;
     liters += onOrder * litersPer;

@@ -32,6 +32,7 @@ const EVENT_LABELS: Record<DebugLogEntry['eventType'], string> = {
   backup: 'ZÁLOHA',
   reminder: 'PŘIPOMENUTÍ',
   geofence_register: 'GEOFENCE REGISTRACE',
+  migration: 'MIGRACE',
 };
 
 function formatTimestamp(iso: string): string {

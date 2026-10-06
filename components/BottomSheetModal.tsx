@@ -14,19 +14,29 @@
 // odejít jinak než lištou HOTOVO). Pole hodnotu uloží při ztrátě
 // fokusu (onBlur). Klepnutí mimo kartu při otevřené klávesnici zavře
 // jen klávesnici, ne celé okno - rozepsaná hodnota se tak neztratí.
+//
+// OPRAVA (po buildu 37503018105) - obsah se VŽDY dá posouvat: karta má
+// výšku počítanou z okna (bez horní bezpečné oblasti a bez klávesnice) a
+// obsah je ve ScrollView. Dřív "maxHeight 80 %" se počítalo z rodiče bez
+// výšky -> na malém displeji / s klávesnicí / větším písmem se spodek okna
+// (pole ZAKÁZKA, tlačítka) nevešel a nešel posunout. `scroll={false}` jen
+// pro obsah, který se posouvá sám.
 
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
+  ScrollView,
   StyleSheet,
   TouchableWithoutFeedback,
+  useWindowDimensions,
   View,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors } from '@/theme';
 
@@ -35,9 +45,24 @@ interface BottomSheetModalProps {
   onClose: () => void;
   children: ReactNode;
   cardStyle?: StyleProp<ViewStyle>; // vlastní rozměry karty (např. podle grafické předlohy)
+  scroll?: boolean; // výchozí ano
 }
 
-export default function BottomSheetModal({ visible, onClose, children, cardStyle }: BottomSheetModalProps) {
+export default function BottomSheetModal({ visible, onClose, children, cardStyle, scroll = true }: BottomSheetModalProps) {
+  const { height } = useWindowDimensions();
+  // okraje z hlavního okna (uvnitř Modal by byly 0)
+  const insets = useSafeAreaInsets();
+  const [keyboard, setKeyboard] = useState(0);
+  useEffect(() => {
+    const show = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', (e) => setKeyboard(e.endCoordinates.height));
+    const hide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboard(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  const maxHeight = Math.max(240, height - Math.max(insets.top, 20) - 16 - keyboard);
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <TouchableWithoutFeedback
@@ -50,7 +75,22 @@ export default function BottomSheetModal({ visible, onClose, children, cardStyle
             style={styles.avoider}
           >
             <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-              <View style={[styles.card, cardStyle]}>{children}</View>
+              <View style={[styles.card, { maxHeight, paddingBottom: keyboard > 0 ? 16 : Math.max(36, insets.bottom + 16) }, cardStyle]}>
+                {scroll ? (
+                  <ScrollView
+                    style={styles.scroll}
+                    keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode="interactive"
+                    showsVerticalScrollIndicator
+                  >
+                    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+                      <View>{children}</View>
+                    </TouchableWithoutFeedback>
+                  </ScrollView>
+                ) : (
+                  children
+                )}
+              </View>
             </TouchableWithoutFeedback>
           </KeyboardAvoidingView>
         </View>
@@ -71,7 +111,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     padding: 20,
-    paddingBottom: 36,
-    maxHeight: '80%',
   },
+  scroll: { flexGrow: 0 },
 });

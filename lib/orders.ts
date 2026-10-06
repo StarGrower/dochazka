@@ -104,58 +104,47 @@ export async function saveOrder(id: number | null, f: OrderFields): Promise<numb
     );
     orderId = r.lastInsertRowId;
   }
-  const before = id ? new Set((await db.getAllAsync<{ place_id: number }>('SELECT place_id FROM order_places WHERE order_id = ?', [orderId])).map((r) => r.place_id)) : new Set<number>();
   await db.runAsync('DELETE FROM order_places WHERE order_id = ?', [orderId]);
   for (const placeId of f.placeIds) await db.runAsync('INSERT OR IGNORE INTO order_places (order_id, place_id) VALUES (?, ?)', [orderId, placeId]);
-  // Změna míst/období -> nevyfakturovaná AUTOMATICKÁ přiřazení této zakázky
-  // znovu (ruční volba se nemění). Dřívější práce na NOVĚ přidaných místech
-  // se nepřiřadí sama - nabídne se (pendingForNewPlaces + assignEarlierWork).
-  await db.runAsync('UPDATE day_work_records SET order_id = NULL WHERE order_id = ? AND invoice_batch_id IS NULL AND order_manual = 0', [orderId]);
-  await db.runAsync('UPDATE trips SET order_id = NULL WHERE order_id = ? AND invoice_batch_id IS NULL AND order_manual = 0', [orderId]);
-  const added = f.placeIds.filter((p) => !before.has(p));
-  await assignOrdersAuto(null, null, added);
+  // Automatická zakázka se neukládá - dopočítá se (effectiveOrders), takže
+  // změna míst/období se projeví sama; ruční volba se nemění.
   return orderId;
 }
 
-// Dřívější nepřiřazená práce na místech zakázky (v jejím období), kterou
-// automatika nepřiřadila - nabídka po přidání místa. Bez ruční volby a
-// bez vyfakturovaných (ty se nepřeřazují).
+// Dřívější práce na nově přidaných místech zakázky - po přidání místa by
+// ji automatika (dopočet) započítala do zakázky, proto se nabídne:
+// Přiřadit = ruční volba této zakázky; Ne = ručně "bez zakázky". Ruční
+// volby jiné zakázky a vyfakturované se nemění.
 export async function earlierWorkOnPlaces(orderId: number, placeIds: number[]): Promise<{ recordIds: number[]; tripIds: number[]; invoicedElsewhere: number }> {
   if (placeIds.length === 0) return { recordIds: [], tripIds: [], invoicedElsewhere: 0 };
   const db = await getDb();
-  const order = await getOrder(orderId);
-  if (!order) return { recordIds: [], tripIds: [], invoicedElsewhere: 0 };
+  const eff = await effectiveOrders();
+  const today = toIsoDate(new Date());
   const ph = placeIds.map(() => '?').join(', ');
-  const range = `${order.dateFrom ? ' AND date >= ?' : ''}${order.dateTo ? ' AND date <= ?' : ''}`;
-  const rangeParams = [order.dateFrom, order.dateTo].filter((x): x is string => !!x);
-  const records = await db.getAllAsync<{ id: number }>(
-    `SELECT id FROM day_work_records WHERE place_id IN (${ph}) AND order_id IS NULL AND order_manual = 0 AND invoice_batch_id IS NULL${range}`,
-    [...placeIds, ...rangeParams]
+  const recs = await db.getAllAsync<{ id: number; date: string; order_manual: number; invoice_batch_id: number | null; order_id: number | null }>(
+    `SELECT id, date, order_manual, invoice_batch_id, order_id FROM day_work_records WHERE place_id IN (${ph})`,
+    placeIds
   );
-  const invoiced = await db.getFirstAsync<{ c: number }>(
-    `SELECT COUNT(*) as c FROM day_work_records WHERE place_id IN (${ph}) AND invoice_batch_id IS NOT NULL AND (order_id IS NULL OR order_id <> ?)${range}`,
-    [...placeIds, orderId, ...rangeParams]
+  const trips = await db.getAllAsync<{ id: number; start_at: string; order_manual: number; invoice_batch_id: number | null }>(
+    `SELECT id, start_at, order_manual, invoice_batch_id FROM trips WHERE is_deleted = 0 AND is_private = 0 AND (to_place_id IN (${ph}) OR from_place_id IN (${ph}))`,
+    [...placeIds, ...placeIds]
   );
-  const trips = (
-    await db.getAllAsync<{ id: number; start_at: string }>(
-      `SELECT id, start_at FROM trips WHERE (to_place_id IN (${ph}) OR from_place_id IN (${ph})) AND order_id IS NULL AND order_manual = 0
-         AND invoice_batch_id IS NULL AND is_deleted = 0 AND is_private = 0`,
-      [...placeIds, ...placeIds]
-    )
-  ).filter((t) => {
-    const d = toIsoDate(new Date(t.start_at));
-    return (!order.dateFrom || d >= order.dateFrom) && (!order.dateTo || d <= order.dateTo);
-  });
-  return { recordIds: records.map((r) => r.id), tripIds: trips.map((t) => t.id), invoicedElsewhere: invoiced?.c ?? 0 };
+  return {
+    recordIds: recs.filter((r) => r.date < today && r.order_manual === 0 && r.invoice_batch_id === null && eff.records.get(r.id) === orderId).map((r) => r.id),
+    tripIds: trips
+      .filter((t) => toIsoDate(new Date(t.start_at)) < today && t.order_manual === 0 && t.invoice_batch_id === null && eff.trips.get(t.id) === orderId)
+      .map((t) => t.id),
+    invoicedElsewhere: recs.filter((r) => r.invoice_batch_id !== null && r.order_id !== orderId).length,
+  };
 }
 
-// Ano = přiřadit (automaticky, takže se při změně míst přepočítá);
-// Ne = nechat "bez zakázky" ručně, ať je automatika později nepřiřadí.
+// Ano = ruční volba této zakázky (order_manual = 1, změna míst ji nezmění);
+// Ne = ručně "bez zakázky".
 export async function resolveEarlierWork(orderId: number, ids: { recordIds: number[]; tripIds: number[] }, assign: boolean): Promise<void> {
   const db = await getDb();
-  const [order, manual] = assign ? [orderId, 0] : [-1, 1];
-  for (const id of ids.recordIds) await db.runAsync('UPDATE day_work_records SET order_id = ?, order_manual = ? WHERE id = ? AND invoice_batch_id IS NULL', [order, manual, id]);
-  for (const id of ids.tripIds) await db.runAsync('UPDATE trips SET order_id = ?, order_manual = ? WHERE id = ? AND invoice_batch_id IS NULL', [order, manual, id]);
+  const order = assign ? orderId : -1;
+  for (const id of ids.recordIds) await db.runAsync('UPDATE day_work_records SET order_id = ?, order_manual = 1 WHERE id = ? AND invoice_batch_id IS NULL', [order, id]);
+  for (const id of ids.tripIds) await db.runAsync('UPDATE trips SET order_id = ?, order_manual = 1 WHERE id = ? AND invoice_batch_id IS NULL', [order, id]);
 }
 
 export async function deleteOrder(id: number): Promise<void> {
@@ -201,12 +190,14 @@ export interface UnassignedRecord {
 // Nepřiřazená = bez zakázky (automaticky i ručně) a nevyfakturovaná.
 export async function listUnassignedRecords(): Promise<UnassignedRecord[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<{ id: number; date: string; name: string; quantity: number; unit: 'hour' | 'day' | 'km'; rate_kc: number; surcharge_pct: number; place_id: number | null; worker_id: number; order_id: number | null }>(
-    `SELECT r.id, r.date, c.name, r.quantity, r.unit, r.rate_kc, r.surcharge_pct, r.place_id, r.worker_id, r.order_id
-     FROM day_work_records r JOIN work_categories c ON c.id = r.category_id
-     WHERE (r.order_id IS NULL OR r.order_id = -1 OR r.order_id IN (SELECT id FROM orders WHERE is_deleted = 1)) AND r.invoice_batch_id IS NULL
-     ORDER BY r.date DESC, r.id`
-  );
+  const eff = await effectiveOrders();
+  const rows = (
+    await db.getAllAsync<{ id: number; date: string; name: string; quantity: number; unit: 'hour' | 'day' | 'km'; rate_kc: number; surcharge_pct: number; place_id: number | null; worker_id: number; order_id: number | null }>(
+      `SELECT r.id, r.date, c.name, r.quantity, r.unit, r.rate_kc, r.surcharge_pct, r.place_id, r.worker_id, r.order_id
+       FROM day_work_records r JOIN work_categories c ON c.id = r.category_id
+       WHERE r.invoice_batch_id IS NULL ORDER BY r.date DESC, r.id`
+    )
+  ).filter((r) => (eff.records.get(r.id) ?? null) === null);
   return rows.map((r) => ({
     id: r.id, date: r.date, categoryName: r.name, quantity: r.quantity, unit: r.unit, amountKc: r.quantity * r.rate_kc * (1 + r.surcharge_pct / 100),
     placeId: r.place_id, workerId: r.worker_id, manualNone: r.order_id === -1,
@@ -224,12 +215,13 @@ export interface UnassignedTrip {
 
 export async function listUnassignedTrips(): Promise<UnassignedTrip[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<{ id: number; start_at: string; distance_m: number; road_distance_m: number | null; km_override: number | null; from_place_id: number | null; to_place_id: number | null; driver_id: number }>(
-    `SELECT id, start_at, distance_m, road_distance_m, km_override, from_place_id, to_place_id, driver_id FROM trips
-     WHERE is_deleted = 0 AND is_private = 0 AND invoice_batch_id IS NULL
-       AND (order_id IS NULL OR order_id = -1 OR order_id IN (SELECT id FROM orders WHERE is_deleted = 1))
-     ORDER BY start_at DESC`
-  );
+  const eff = await effectiveOrders();
+  const rows = (
+    await db.getAllAsync<{ id: number; start_at: string; distance_m: number; road_distance_m: number | null; km_override: number | null; from_place_id: number | null; to_place_id: number | null; driver_id: number }>(
+      `SELECT id, start_at, distance_m, road_distance_m, km_override, from_place_id, to_place_id, driver_id FROM trips
+       WHERE is_deleted = 0 AND is_private = 0 AND invoice_batch_id IS NULL ORDER BY start_at DESC`
+    )
+  ).filter((t) => (eff.trips.get(t.id) ?? null) === null);
   return rows.map((t) => ({
     id: t.id, startAt: t.start_at, km: tripKm({ kmOverride: t.km_override, distanceM: t.distance_m, roadDistanceM: t.road_distance_m }),
     fromPlaceId: t.from_place_id, toPlaceId: t.to_place_id, driverId: t.driver_id,
@@ -267,54 +259,68 @@ function orderFor(orders: Order[], placeId: number | null, date: string): number
   return match?.id ?? null;
 }
 
-// Přiřadí nepřiřazené zápisy a přejezdy (rozsah dnů, null = vše).
-// `skipPlaceIds` - právě přidaná místa zakázky: jejich dřívější práce se
-// nepřiřadí sama, nabídne se (earlierWorkOnPlaces).
-export async function assignOrdersAuto(fromDate: string | null = null, toDate: string | null = null, skipPlaceIds: number[] = []): Promise<void> {
+// NETRIVIÁLNÍ ROZHODNUTÍ (migrace v8) - automatická zakázka se NEUKLÁDÁ,
+// jen dopočítává (otevření dne nic nezapisuje). Do DB jde jen ruční volba
+// (order_manual = 1), hromadné přiřazení a vytvoření podkladu k faktuře
+// (zakázka se u vyfakturovaných zafixuje). Pravidla dopočtu:
+// - vyfakturovaná -> uložená zakázka podkladu; ruční -> uložená (-1 = žádná);
+// - jinak podle místa položky a období zakázky; moje položka bez místa podle
+//   mých pobytů dne (jen když patří jediné zakázce); kolega bez místa nikam;
+// - přejezd podle místa příjezdu, jinak odjezdu; soukromý nikam.
+export interface EffectiveOrders {
+  records: Map<number, number | null>;
+  trips: Map<number, number | null>;
+}
+
+export async function effectiveOrders(): Promise<EffectiveOrders> {
   const db = await getDb();
-  const orders = (await listOrders()).filter((o) => o.placeIds.length > 0);
-  if (orders.length === 0) return;
+  const orders = await listOrders();
+  const live = new Set(orders.map((o) => o.id));
+  const withPlaces = orders.filter((o) => o.placeIds.length > 0);
+  const stored = (orderId: number | null) => (orderId !== null && orderId > 0 && live.has(orderId) ? orderId : null);
 
-  // Bez zadaného rozsahu jen období, které zakázky pokrývají (bez data = vše).
-  if (!fromDate || !toDate) {
-    const froms = orders.map((o) => o.dateFrom);
-    const tos = orders.map((o) => o.dateTo);
-    fromDate = froms.includes(null) ? '0000-01-01' : (froms as string[]).sort()[0];
-    toDate = tos.includes(null) ? '9999-12-31' : (tos as string[]).sort().reverse()[0];
+  const visits = await db.getAllAsync<{ place_id: number; start_at: string }>('SELECT place_id, start_at FROM visits WHERE is_deleted = 0 AND place_id IS NOT NULL');
+  const dayOrder = new Map<string, Set<number>>();
+  for (const v of visits) {
+    const date = toIsoDate(new Date(v.start_at));
+    const o = orderFor(withPlaces, v.place_id, date);
+    if (o === null) continue;
+    const set = dayOrder.get(date) ?? new Set<number>();
+    set.add(o);
+    dayOrder.set(date, set);
   }
-  const range = 'AND date >= ? AND date <= ?';
-  const rangeParams = [fromDate, toDate];
-  const records = await db.getAllAsync<{ id: number; date: string; place_id: number | null; worker_id: number }>(
-    `SELECT id, date, place_id, worker_id FROM day_work_records WHERE order_id IS NULL AND order_manual = 0 AND invoice_batch_id IS NULL ${range}`,
-    rangeParams
+
+  const records = new Map<number, number | null>();
+  const recs = await db.getAllAsync<{ id: number; date: string; place_id: number | null; worker_id: number; order_id: number | null; order_manual: number; invoice_batch_id: number | null }>(
+    'SELECT id, date, place_id, worker_id, order_id, order_manual, invoice_batch_id FROM day_work_records'
   );
-  const dayCandidates = new Map<string, number | null>(); // den -> jediná zakázka podle pobytů
-  const today = toIsoDate(new Date());
-  for (const r of records) {
-    if (r.place_id !== null && skipPlaceIds.includes(r.place_id) && r.date < today) continue;
-    let orderId = orderFor(orders, r.place_id, r.date);
-    // Zápis bez místa podle MÝCH pobytů jen u mojí práce (kolega mohl být jinde).
-    if (orderId === null && r.place_id === null && r.worker_id === ME_ID) {
-      if (!dayCandidates.has(r.date)) {
-        const visits = await getVisitsForDay(r.date);
-        const ids = new Set(visits.map((v) => orderFor(orders, v.placeId, r.date)).filter((x): x is number => x !== null));
-        dayCandidates.set(r.date, ids.size === 1 ? [...ids][0] : null);
+  for (const r of recs) {
+    if (r.invoice_batch_id !== null) records.set(r.id, r.order_id !== null && r.order_id > 0 ? r.order_id : null);
+    else if (r.order_manual === 1) records.set(r.id, stored(r.order_id));
+    else {
+      let o = orderFor(withPlaces, r.place_id, r.date);
+      if (o === null && r.place_id === null && r.worker_id === ME_ID) {
+        const set = dayOrder.get(r.date);
+        o = set && set.size === 1 ? [...set][0] : null;
       }
-      orderId = dayCandidates.get(r.date) ?? null;
+      records.set(r.id, o);
     }
-    if (orderId !== null) await db.runAsync('UPDATE day_work_records SET order_id = ? WHERE id = ?', [orderId, r.id]);
   }
 
-  const trips = await db.getAllAsync<{ id: number; start_at: string; to_place_id: number | null; from_place_id: number | null }>(
-    "SELECT id, start_at, to_place_id, from_place_id FROM trips WHERE order_id IS NULL AND order_manual = 0 AND invoice_batch_id IS NULL AND is_deleted = 0 AND is_private = 0"
+  const trips = new Map<number, number | null>();
+  const ts = await db.getAllAsync<{ id: number; start_at: string; from_place_id: number | null; to_place_id: number | null; order_id: number | null; order_manual: number; invoice_batch_id: number | null; is_private: number }>(
+    'SELECT id, start_at, from_place_id, to_place_id, order_id, order_manual, invoice_batch_id, is_private FROM trips WHERE is_deleted = 0'
   );
-  for (const t of trips) {
-    const date = toIsoDate(new Date(t.start_at));
-    if (date < fromDate || date > toDate) continue;
-    if (date < today && [t.to_place_id, t.from_place_id].some((p) => p !== null && skipPlaceIds.includes(p))) continue;
-    const orderId = orderFor(orders, t.to_place_id, date) ?? orderFor(orders, t.from_place_id, date);
-    if (orderId !== null) await db.runAsync('UPDATE trips SET order_id = ? WHERE id = ?', [orderId, t.id]);
+  for (const t of ts) {
+    if (t.invoice_batch_id !== null) trips.set(t.id, t.order_id !== null && t.order_id > 0 ? t.order_id : null);
+    else if (t.order_manual === 1) trips.set(t.id, stored(t.order_id));
+    else if (t.is_private === 1) trips.set(t.id, null);
+    else {
+      const date = toIsoDate(new Date(t.start_at));
+      trips.set(t.id, orderFor(withPlaces, t.to_place_id, date) ?? orderFor(withPlaces, t.from_place_id, date));
+    }
   }
+  return { records, trips };
 }
 
 // --- výdaje ---
@@ -357,14 +363,18 @@ export async function listInvoiceBatches(orderId: number | null = null): Promise
 export async function createInvoiceBatch(order: Order, totalKc: number, note: string, workerId: number | null = null): Promise<number> {
   const db = await getDb();
   let batchId = 0;
-  const w = workerId !== null ? ' AND worker_id = ?' : '';
-  const wt = workerId !== null ? ' AND driver_id = ?' : '';
-  const wp = workerId !== null ? [workerId] : [];
+  // Stejné položky, jaké ukazuje přehled zakázky (dopočtená zakázka); při
+  // fakturaci se zakázka u položek zafixuje (order_id).
+  const eff = await effectiveOrders();
+  const recs = await db.getAllAsync<{ id: number; worker_id: number }>('SELECT id, worker_id FROM day_work_records WHERE invoice_batch_id IS NULL');
+  const trs = await db.getAllAsync<{ id: number; driver_id: number }>('SELECT id, driver_id FROM trips WHERE invoice_batch_id IS NULL AND is_deleted = 0');
+  const recordIds = recs.filter((r) => eff.records.get(r.id) === order.id && (workerId === null || r.worker_id === workerId)).map((r) => r.id);
+  const tripIds = trs.filter((t) => eff.trips.get(t.id) === order.id && (workerId === null || t.driver_id === workerId)).map((t) => t.id);
   await db.withExclusiveTransactionAsync(async (txn) => {
     const r = await txn.runAsync('INSERT INTO invoice_batches (order_id, total_kc, note) VALUES (?, ?, ?)', [order.id, totalKc, note]);
     batchId = r.lastInsertRowId;
-    await txn.runAsync(`UPDATE day_work_records SET invoice_batch_id = ? WHERE order_id = ? AND invoice_batch_id IS NULL${w}`, [batchId, order.id, ...wp]);
-    await txn.runAsync(`UPDATE trips SET invoice_batch_id = ? WHERE order_id = ? AND invoice_batch_id IS NULL AND is_deleted = 0${wt}`, [batchId, order.id, ...wp]);
+    for (const id of recordIds) await txn.runAsync('UPDATE day_work_records SET invoice_batch_id = ?, order_id = ? WHERE id = ? AND invoice_batch_id IS NULL', [batchId, order.id, id]);
+    for (const id of tripIds) await txn.runAsync('UPDATE trips SET invoice_batch_id = ?, order_id = ? WHERE id = ? AND invoice_batch_id IS NULL', [batchId, order.id, id]);
     if (workerId === null) {
       await txn.runAsync('UPDATE order_expenses SET invoice_batch_id = ? WHERE order_id = ? AND invoice_batch_id IS NULL AND is_deleted = 0', [batchId, order.id]);
     }
@@ -437,37 +447,38 @@ async function kmRates(): Promise<{ byId: Map<number, number>; defaultRate: numb
 }
 
 // Palivo zakázky (etapa 6 doplní rozpočítání podle Mth) - zde nula.
-export let orderFuelCost: (orderId: number) => Promise<{ kc: number; liters: number }> = async () => ({ kc: 0, liters: 0 });
+export let orderFuelCost: (orderId: number, eff: EffectiveOrders) => Promise<{ kc: number; liters: number }> = async () => ({ kc: 0, liters: 0 });
 export function setOrderFuelCostProvider(fn: typeof orderFuelCost): void {
   orderFuelCost = fn;
 }
 
 // workerId: přehled jen pro jednoho pracovníka (podklad, export); bez
 // výdajů, ty patří celé zakázce.
-export async function getOrderDetail(orderId: number, workerId: number | null = null): Promise<OrderDetail | null> {
+export async function getOrderDetail(orderId: number, workerId: number | null = null, effIn?: EffectiveOrders): Promise<OrderDetail | null> {
   const order = await getOrder(orderId);
   if (!order) return null;
   const db = await getDb();
-  const records = await db.getAllAsync<{
+  const eff = effIn ?? (await effectiveOrders());
+  const records = (await db.getAllAsync<{
     category_id: number; category_name: string; color: string; unit: 'hour' | 'day' | 'km'; quantity: number; rate_kc: number;
-    surcharge_pct: number; date: string; worker_id: number; invoice_batch_id: number | null;
+    id: number; surcharge_pct: number; date: string; worker_id: number; invoice_batch_id: number | null;
   }>(
-    `SELECT r.category_id, c.name as category_name, c.color, r.unit, r.quantity, r.rate_kc, r.surcharge_pct, r.date, r.worker_id, r.invoice_batch_id
-     FROM day_work_records r JOIN work_categories c ON c.id = r.category_id WHERE r.order_id = ? ${workerId !== null ? 'AND r.worker_id = ?' : ''} ORDER BY r.date`,
-    workerId !== null ? [orderId, workerId] : [orderId]
-  );
+    `SELECT r.id, r.category_id, c.name as category_name, c.color, r.unit, r.quantity, r.rate_kc, r.surcharge_pct, r.date, r.worker_id, r.invoice_batch_id
+     FROM day_work_records r JOIN work_categories c ON c.id = r.category_id ${workerId !== null ? 'WHERE r.worker_id = ?' : ''} ORDER BY r.date`,
+    workerId !== null ? [workerId] : []
+  )).filter((r) => eff.records.get(r.id) === orderId);
   // Přejezdy bez km v Práci a strojích (jinak by se počítaly dvakrát).
-  const trips = await db.getAllAsync<{
-    start_at: string; distance_m: number; road_distance_m: number | null; km_override: number | null; vehicle_category_id: number | null;
+  const trips = (await db.getAllAsync<{
+    id: number; start_at: string; distance_m: number; road_distance_m: number | null; km_override: number | null; vehicle_category_id: number | null;
     invoice_batch_id: number | null;
   }>(
-    `SELECT t.start_at, t.distance_m, t.road_distance_m, t.km_override, t.vehicle_category_id, t.invoice_batch_id FROM trips t
-     WHERE t.order_id = ? AND t.is_deleted = 0 AND t.is_private = 0 ${workerId !== null ? 'AND t.driver_id = ?' : ''}
+    `SELECT t.id, t.start_at, t.distance_m, t.road_distance_m, t.km_override, t.vehicle_category_id, t.invoice_batch_id FROM trips t
+     WHERE t.is_deleted = 0 ${workerId !== null ? 'AND t.driver_id = ?' : ''}
        AND (t.work_record_id IS NULL OR NOT EXISTS (SELECT 1 FROM day_work_records r WHERE r.id = t.work_record_id))`,
-    workerId !== null ? [orderId, workerId] : [orderId]
-  );
+    workerId !== null ? [workerId] : []
+  )).filter((t) => eff.trips.get(t.id) === orderId);
   const rates = await kmRates();
-  const [allExpenses, batches, people, fuel] = await Promise.all([listExpenses(orderId), listInvoiceBatches(orderId), listPeople(true), orderFuelCost(orderId)]);
+  const [allExpenses, batches, people, fuel] = await Promise.all([listExpenses(orderId), listInvoiceBatches(orderId), listPeople(true), orderFuelCost(orderId, eff)]);
   const expenses = workerId === null ? allExpenses : [];
   const stats = computeOrderStats({
     priceMode: order.priceMode,
@@ -504,11 +515,11 @@ export interface OrderSummary {
 }
 
 export async function listOrderSummaries(): Promise<OrderSummary[]> {
-  await assignOrdersAuto();
   const orders = await listOrders();
+  const eff = await effectiveOrders();
   const out: OrderSummary[] = [];
   for (const o of orders) {
-    const detail = await getOrderDetail(o.id);
+    const detail = await getOrderDetail(o.id, null, eff);
     if (!detail) continue;
     out.push({
       order: o,

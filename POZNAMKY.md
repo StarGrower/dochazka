@@ -12,7 +12,7 @@ Vyvíjí se na Windows/WSL2 (bez Macu), bez placených služeb.
 **Etapa 2, ČÁST B (záznam míst) - HOTOVO, build OVĚŘEN (15m42s, všechny kroky zelené vč. kompilace Swift modulu `visit-monitor`, `.ipa` ~14,5 MB, run 37043119315). Test v terénu proběhl 2.-4. 10. 2026.**
 **Oprava 2 (po terénním testu etapy 2) - HOTOVO (skupiny A-F), build OVĚŘEN (run 37210061504, 13m21s, všechny kroky zelené vč. Swift modulu, `.ipa` ~15 MB). Čeká na test v telefonu - viz "Co otestovat v telefonu (oprava 2)".**
 
-**Etapy 5-7 (zakázky, stroje, kniha jízd) + opravy po testu 5. 10. + zaokrouhlení / neznámá místa - HOTOVO jako jeden build (commit po každé etapě), viz sekce "Etapy 5-7" níž. Build OVĚŘEN (run 37425246274, 10m10s, vše zelené vč. Swift modulu, `.ipa` ~16,6 MB). Doplněk "práce mimo moje pobyty" (migrace v6) - build OVĚŘEN (run 37493427755, 18m36s, vše zelené vč. Swift modulu, `.ipa` ~16,6 MB). Oprava přiřazení k zakázce (migrace v7) - build OVĚŘEN (run 37503018105, 16m13s, vše zelené, `.ipa` ~16,7 MB). Čeká na test.**
+**Etapy 5-7 (zakázky, stroje, kniha jízd) + opravy po testu 5. 10. + zaokrouhlení / neznámá místa - HOTOVO jako jeden build (commit po každé etapě), viz sekce "Etapy 5-7" níž. Build OVĚŘEN (run 37425246274, 10m10s, vše zelené vč. Swift modulu, `.ipa` ~16,6 MB). Doplněk "práce mimo moje pobyty" (migrace v6) - build OVĚŘEN (run 37493427755, 18m36s, vše zelené vč. Swift modulu, `.ipa` ~16,6 MB). Oprava přiřazení k zakázce (migrace v7) - build OVĚŘEN (run 37503018105). Oprava duplicit / dopočtu zakázky / oken (migrace v8) - build čeká.**
 **Etapa 4 (záloha, stav záznamu, připomenutí, výkaz pro šéfa) - HOTOVO, build OVĚŘEN (run 37242592887, 16m52s, vše zelené vč. Swift modulu dochazka-native, `.ipa` ~15,8 MB). Čeká na test - viz "Etapa 4 - co testovat".**
 **Plán etap 4-8: `PLAN_DALSI_ETAPY.md` (jen lokálně, v `.gitignore`), grafické předlohy v `private/` (predloha-pripominka.html, predloha-zakazky.html).**
 **Etapa 3 (přejezdy, trasy, km, mapa) + ikona, logo a úvodní animace - HOTOVO, build OVĚŘEN (run 37218589500, 15m34s, vše zelené vč. react-native-maps a react-native-svg, `.ipa` ~15 MB). Čeká na test v terénu - viz "Etapa 3 - co testovat v terénu".**
@@ -211,6 +211,38 @@ opakovaně bez chyb, uuid u všech řádků, trigger u nového řádku.
   (automaticky); Ne = položky ručně "bez zakázky", ať je automatika při
   otevření dne nepřiřadí. Ruční volby jiné zakázky a vyfakturované se nemění.
 - **Detail dne:** štítek zakázky u položky a přejezdu, jinak "bez zakázky".
+
+### Oprava po buildu 37503018105 - duplicity, dopočet zakázky, okna (migrace v8, HOTOVO)
+
+- **Duplicitní práce = dva řádky v DB** (ne chyba zobrazení - položka je ve
+  skupině podle svého place_id). Příčina: položka BEZ místa (ruční, výchozí,
+  Navrhnout, dřívější automatické vkládání) + stejná práce zapsaná znovu S
+  místem přes "Zapsat pobyt" / připomenutí - kontrola "pobyt zapsán"
+  počítala jen položky s místem. Prevence: moje položka bez místa = pobyty
+  dne zapsané (`recordedPlacesForDate`).
+- **Migrace v8** (záloha `dochazka-zaloha-pred-etapou-8.db`):
+  A) dvojice (den, stroj/práce, jednotka, množství, pracovník; bez místa +
+  s místem) -> ponechá starší, doplní jí místo / ruční zakázku / čas,
+  duplicita do `day_work_records_removed`; vyfakturovaná se neodebere;
+  jiné množství jen do deníku. Každá dvojice v ladicím deníku (MIGRACE).
+  B1) "Přiřadit i dřívější práci" ukládal order_manual = 0 -> přiřazení
+  změněná po migraci v7 (updated_at, místo patří zakázce) se označí jako
+  ruční (zahrne i automatická přiřazení z otevření dne po v7 - tolerováno);
+  B2) automatická přiřazení vymazána. Kód: "Přiřadit" teď ukládá ručně.
+- **NETRIVIÁLNÍ ROZHODNUTÍ - zakázka se dopočítává** (`effectiveOrders`):
+  otevření dne nic nezapisuje; do DB jen ruční volba, hromadné přiřazení,
+  "Ne, nechat bez zakázky" a podklad k faktuře (zafixuje order_id).
+  Přehled zakázky, podklad, palivo, nepřiřazená práce i kniha jízd počítají
+  z dopočtu. `assignOrdersAuto` zrušeno.
+- **Detail dne:** položka jen v jedné skupině - s místem u něj; moje bez
+  místa u jediného pracovního místa dne ("místo podle pobytu", jen
+  zobrazení), jinak "Podle mých pobytů". Tlačítko SMAZAT POLOŽKU (potvrzení;
+  vyfakturovaná nejde).
+- **Okna:** `BottomSheetModal` vždy posouvatelný (výška z okna bez horní
+  bezpečné oblasti a klávesnice, ScrollView) - týká se všech 23 oken.
+- **Mapa na celou obrazovku:** iOS pageSheet (zavření tahem dolů za pruh
+  nahoře), ZAVŘÍT 44×44+ s tmavým podkladem. Příčina: SafeAreaView uvnitř
+  Modal má nulové okraje.
 
 ## Etapa 4 - záloha, stav záznamu, připomenutí, výkaz pro šéfa
 

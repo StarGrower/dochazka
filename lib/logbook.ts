@@ -7,7 +7,7 @@ import { getDb, getGeocodeCache, getInternalValue, listAllTrips, listCategories,
 import { geocodeKey, nearLocalityLabel } from './geocode';
 import { reconcileOdometer, runningOdometer, suggestTrip, type HistoryTrip, type OdoAnchor, type TripSuggestion } from './logbookCalc';
 import { listMachines, listReadings } from './machines';
-import { listOrders, listPeople } from './orders';
+import { effectiveOrders, listOrders, listPeople } from './orders';
 import { tripKm } from './tripPlan';
 import { KEY_TRIP_BT_LOG } from './tripTracking';
 import type { Person, Trip } from './types';
@@ -72,6 +72,7 @@ export async function listLogbookTrips(): Promise<LogbookTrip[]> {
   if (trips.length === 0) return [];
   const places = new Map((await listPlaces(true)).map((p) => [p.id, p]));
   const orders = new Map((await listOrders()).map((o) => [o.id, o]));
+  const eff = await effectiveOrders();
   const vehicles = await listMachines();
   const defVehicle = await defaultVehicleId();
   const closed = await closedMonths();
@@ -127,7 +128,8 @@ export async function listLogbookTrips(): Promise<LogbookTrip[]> {
     const btHit = bt.find((b) => b.atMs >= startMs - 15 * 60000 && b.atMs <= endMs + 5 * 60000 && btVehicles.some((v) => b.name.includes(v.name)));
     const btVehicle = btHit ? (btVehicles.find((v) => btHit.name.includes(v.name))?.id ?? null) : null;
     // Bez historie: účel podle zakázky, jinak podle cíle.
-    const order = t.orderId !== null && t.orderId > 0 ? orders.get(t.orderId) : undefined;
+    const effOrder = eff.trips.get(t.id) ?? null;
+    const order = effOrder !== null ? orders.get(effOrder) : undefined;
     const toPlace = t.toPlaceId !== null ? places.get(t.toPlaceId) : undefined;
     const fallbackPurpose = order ? order.name : toPlace && !toPlace.isPrivate ? toPlace.name : toPlace?.isHome ? 'Cesta domů' : null;
     const purpose = t.purpose.trim() ? null : (learned?.purpose ?? fallbackPurpose);

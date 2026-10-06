@@ -239,7 +239,7 @@ function ValueInput({ value, unitLabel, big, onChange }: { value: number; unitLa
 
 // Rozměry podle předlohy (.sh, .plc, .chip, .vb, .vv, .bt, .bt2).
 const styles = StyleSheet.create({
-  sheet: { borderTopLeftRadius: 18, borderTopRightRadius: 18, paddingTop: 10, paddingHorizontal: 16, paddingBottom: 26, maxHeight: '88%' },
+  sheet: { borderTopLeftRadius: 18, borderTopRightRadius: 18, paddingTop: 10, paddingHorizontal: 16, paddingBottom: 26 },
   content: { gap: 14 },
   grab: { width: 40, height: 5, borderRadius: 3, backgroundColor: '#4A4942', alignSelf: 'center' },
   title: { color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(24), letterSpacing: 0.7 },

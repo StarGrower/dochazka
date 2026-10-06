@@ -245,7 +245,8 @@ export type DebugEventType =
   | 'trip'
   | 'backup'
   | 'reminder'
-  | 'geofence_register';
+  | 'geofence_register'
+  | 'migration';
 
 export interface DebugLogEntry {
   id: number;

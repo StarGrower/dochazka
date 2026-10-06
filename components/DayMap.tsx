@@ -6,9 +6,9 @@
 // přiblíží daný pobyt/přejezd.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker, Polyline, type LatLng } from 'react-native-maps';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, fonts, fs, MIN_TOUCH, radii } from '@/theme';
 
@@ -102,6 +102,7 @@ function MapContent({ stops, routes, selectedKey, fullscreen }: DayMapProps & { 
 
 export default function DayMap(props: DayMapProps) {
   const [fullscreen, setFullscreen] = useState(false);
+  const insets = useSafeAreaInsets();
   const empty = props.stops.length === 0 && props.routes.length === 0;
 
   if (empty) {
@@ -119,14 +120,29 @@ export default function DayMap(props: DayMapProps) {
         {/* Průhledná vrstva - klepnutí kamkoliv roztáhne mapu (malá mapa se nehýbe). */}
         <Pressable style={StyleSheet.absoluteFill} onPress={() => setFullscreen(true)} />
       </View>
-      <Modal visible={fullscreen} animationType="slide" onRequestClose={() => setFullscreen(false)}>
+      {/* OPRAVA (po buildu 37503018105): SafeAreaView uvnitř Modal dostával
+          nulové okraje (Modal = samostatné okno) -> ZAVŘÍT bylo pod horní
+          lištou iPhonu. Teď: iOS list "pageSheet" (zavření tahem dolů za
+          pruh nahoře - mapa sama tah spotřebuje), okraje z hlavního okna a
+          tlačítko 44×44+ s tmavým podkladem. */}
+      <Modal
+        visible={fullscreen}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setFullscreen(false)}
+      >
         <View style={styles.fullscreen}>
-          <MapContent {...props} fullscreen />
-          <SafeAreaView edges={['top']} style={styles.closeWrap} pointerEvents="box-none">
-            <TouchableOpacity style={styles.closeButton} onPress={() => setFullscreen(false)}>
-              <Text style={styles.closeText}>ZAVŘÍT</Text>
-            </TouchableOpacity>
-          </SafeAreaView>
+          <View style={styles.grabArea}>
+            <View style={styles.grab} />
+          </View>
+          <View style={styles.flex}>
+            <MapContent {...props} fullscreen />
+            <View style={[styles.closeWrap, { top: 8 + (Platform.OS === 'ios' ? 0 : insets.top) }]} pointerEvents="box-none">
+              <TouchableOpacity style={styles.closeButton} onPress={() => setFullscreen(false)} hitSlop={8} accessibilityLabel="Zavřít mapu">
+                <Text style={styles.closeText}>✕  ZAVŘÍT</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </Modal>
     </>
@@ -161,14 +177,20 @@ const styles = StyleSheet.create({
   stopText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(12) },
   stopTextMuted: { color: colors.textMuted },
   fullscreen: { flex: 1, backgroundColor: colors.background },
-  closeWrap: { position: 'absolute', top: 0, right: 0, left: 0, alignItems: 'flex-end', padding: 12 },
+  flex: { flex: 1 },
+  grabArea: { height: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background },
+  grab: { width: 40, height: 5, borderRadius: 3, backgroundColor: colors.border },
+  closeWrap: { position: 'absolute', right: 12, left: 12, alignItems: 'flex-end' },
   closeButton: {
-    height: MIN_TOUCH,
+    minHeight: MIN_TOUCH,
+    minWidth: MIN_TOUCH,
     paddingHorizontal: 16,
     borderRadius: radii.card,
-    backgroundColor: colors.card,
+    backgroundColor: 'rgba(19,19,17,0.85)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  closeText: { color: colors.accent, fontFamily: fonts.headingBold, fontSize: fs(14), letterSpacing: 1 },
+  closeText: { color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(14), letterSpacing: 1 },
 });

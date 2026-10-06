@@ -68,7 +68,7 @@ import { holidayName, isWeekend } from '@/lib/holidays';
 import { tripKm } from '@/lib/tripPlan';
 import { ME_ID, type AppSettings, type Order, type DayWorkRecordWithCategory, type Person, type Place, type RateUnit, type RoutePoint, type Trip, type VisitWithPlace, type WorkCategory } from '@/lib/types';
 import { defectWarningFor } from '@/lib/machines';
-import { assignOrdersAuto, autoOrderFor, listOrders, listPeople, setRecordOrder, setTripOrder } from '@/lib/orders';
+import { autoOrderFor, listOrders, listPeople, setRecordOrder, setTripOrder } from '@/lib/orders';
 import { evaluateRemindersSafe, proposalForStay, workStaysForDate } from '@/lib/reminders';
 import { formatDurationHM } from '@/lib/stayProposal';
 import { refreshTrips } from '@/lib/visits';
@@ -153,8 +153,7 @@ export default function DayDetailScreen() {
 
   const load = useCallback(async () => {
     if (!date) return;
-    // Etapa 5: nepřiřazené zápisy a přejezdy dne -> zakázky podle míst.
-    await assignOrdersAuto(date, date).catch(() => {});
+    // Otevření dne NIC nezapisuje (migrace v8) - zakázka se dopočítává.
     const ordersList = await listOrders();
     setAllOrders(ordersList);
     setOrderOptions(ordersList.filter((o) => o.status !== 'paid').map((o) => ({ id: o.id, name: o.name })));
@@ -330,7 +329,11 @@ export default function DayDetailScreen() {
   };
 
   const handleDeleteRecord = (record: DayWorkRecordWithCategory) => {
-    Alert.alert('Smazat položku', `Smazat "${record.categoryName}" z tohoto dne?`, [
+    if (record.invoiceBatchId !== null) {
+      Alert.alert('Nejde smazat', 'Položka je vyfakturovaná v podkladu k faktuře. Smazat ji jde až po zrušení podkladu v detailu zakázky.');
+      return;
+    }
+    Alert.alert('Smazat položku', `Smazat "${record.categoryName}" (${formatQuantity(record.quantity, record.unit)}) z tohoto dne?`, [
       { text: 'Zrušit', style: 'cancel' },
       {
         text: 'Smazat',
@@ -637,25 +640,31 @@ export default function DayDetailScreen() {
     .filter(Boolean)
     .join('  +  ');
 
-  // Položky seskupené podle místa (doplněk etapy 5) - hlavička skupiny jen
-  // když je víc míst nebo položka u konkrétního místa.
+  const dayPlaceIds = [...new Set(visits.filter((v) => v.placeId !== null && !v.placeIsPrivate).map((v) => v.placeId as number))];
+
+  // Položky seskupené podle místa - každá položka jen v JEDNÉ skupině:
+  // s místem u něj; moje položka bez místa u jediného pracovního místa dne
+  // (dopočteno, nic se nezapisuje); jinak "Podle mých pobytů".
   const placeName = (id: number | null) => (id === null ? 'Podle mých pobytů' : (places.find((p) => p.id === id)?.name ?? 'Smazané místo'));
+  const displayPlace = (r: DayWorkRecordWithCategory): number | null =>
+    r.placeId ?? (r.workerId === ME_ID && dayPlaceIds.length === 1 ? dayPlaceIds[0] : null);
   const groupOrder: (number | null)[] = [];
-  for (const r of records) if (!groupOrder.includes(r.placeId)) groupOrder.push(r.placeId);
+  for (const r of records) if (!groupOrder.includes(displayPlace(r))) groupOrder.push(displayPlace(r));
   const showGroups = groupOrder.length > 1 || (groupOrder.length === 1 && groupOrder[0] !== null);
   type ListRow = { kind: 'group'; key: string; title: string; kc: number } | { kind: 'record'; key: string; record: DayWorkRecordWithCategory };
   const listRows: ListRow[] = showGroups
     ? groupOrder.flatMap((pid) => {
-        const items = records.filter((r) => r.placeId === pid);
+        const items = records.filter((r) => displayPlace(r) === pid);
         return [
           { kind: 'group' as const, key: `g${pid ?? 'auto'}`, title: placeName(pid), kc: items.reduce((sum, r) => sum + recordAmountKc(r), 0) },
           ...items.map((r) => ({ kind: 'record' as const, key: String(r.id), record: r })),
         ];
       })
     : records.map((r) => ({ kind: 'record' as const, key: String(r.id), record: r }));
-  const dayPlaceIds = [...new Set(visits.filter((v) => v.placeId !== null && !v.placeIsPrivate).map((v) => v.placeId as number))];
-  // Kam by položka spadla automaticky: podle místa; bez místa podle mých
-  // pobytů (jen moje práce, jen když dnešní pobyty patří jediné zakázce).
+
+  // Zakázka se dopočítává (migrace v8): kam by položka spadla automaticky -
+  // podle místa; bez místa podle mých pobytů (jen moje práce, jen když
+  // dnešní pobyty patří jediné zakázce).
   const autoOrderName = (placeId: number | null, workerId: number): string | null => {
     if (placeId !== null) return autoOrderFor(allOrders, placeId, date)?.name ?? null;
     if (workerId !== ME_ID) return null;
@@ -664,6 +673,13 @@ export default function DayDetailScreen() {
   };
   const orderLabel = (orderId: number | null): string | null =>
     orderId !== null && orderId > 0 ? (allOrders.find((o) => o.id === orderId)?.name ?? null) : null;
+  const recordOrderName = (r: DayWorkRecordWithCategory): string | null =>
+    r.invoiceBatchId !== null || r.orderManual ? orderLabel(r.orderId) : autoOrderName(r.placeId, r.workerId);
+  const tripOrderName = (t: Trip): string | null => {
+    if (t.invoiceBatchId !== null || t.orderManual) return orderLabel(t.orderId);
+    if (t.isPrivate || !date) return null;
+    return (autoOrderFor(allOrders, t.toPlaceId, date) ?? autoOrderFor(allOrders, t.fromPlaceId, date))?.name ?? null;
+  };
 
   if (!date || !settings) return null;
 
@@ -748,7 +764,7 @@ export default function DayDetailScreen() {
                         Přejezd{kmLabel} · {formatDurationMinutes(item.toMs - item.fromMs)}
                         {trip?.isPrivate ? ' · soukromá' : ''}
                         {trip?.workRecordId ? ' · v práci ✓' : ''}
-                        {trip && !trip.isPrivate && allOrders.length > 0 ? ` · ${orderLabel(trip.orderId) ?? 'bez zakázky'}` : ''}
+                        {trip && !trip.isPrivate && allOrders.length > 0 ? ` · ${tripOrderName(trip) ?? 'bez zakázky'}` : ''}
                       </Text>
                       {trip && (
                         <TouchableOpacity onPress={() => setTripEditTarget(trip)} hitSlop={10}>
@@ -848,10 +864,11 @@ export default function DayDetailScreen() {
                   {formatQuantity(item.quantity, item.unit)} · {formatNumberCs(item.rateKc)} {UNIT_RATE_LABEL[item.unit]}
                   {item.surchargePct > 0 ? ` · +${formatNumberCs(item.surchargePct)} %` : ''}
                   {item.timeFrom && item.timeTo ? ` · ${item.timeFrom}–${item.timeTo}` : ''}
+                  {item.placeId === null && showGroups && displayPlace(item) !== null ? ' · místo podle pobytu' : ''}
                 </Text>
-                {orderLabel(item.orderId) ? (
+                {recordOrderName(item) ? (
                   <Text style={styles.orderTag} numberOfLines={1}>
-                    {orderLabel(item.orderId)}
+                    {recordOrderName(item)}
                   </Text>
                 ) : allOrders.length > 0 ? (
                   <Text style={styles.noOrderTag}>bez zakázky</Text>

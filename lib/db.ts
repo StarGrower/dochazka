@@ -220,7 +220,7 @@ async function migrateAddCategoryKind(db: SQLite.SQLiteDatabase): Promise<void> 
 // telefonu se nesmí ztratit". Migrace samy nic fyzicky nemažou (jen
 // is_deleted / přesun do *_removed tabulek).
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 // Záloha se dělá před první čekající migrací; jméno podle verze, ze které
 // se migruje (existující záloha se nikdy nepřepisuje).
 function backupFileName(fromVersion: number): string {
@@ -276,6 +276,10 @@ async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: 
   if (version < 7) {
     await migrateV7OrderManual(db);
     await db.execAsync('PRAGMA user_version = 7');
+  }
+  if (version < 8) {
+    await migrateV8Duplicates(db);
+    await db.execAsync('PRAGMA user_version = 8');
   }
 }
 
@@ -880,6 +884,112 @@ async function migrateV7OrderManual(db: SQLite.SQLiteDatabase): Promise<void> {
     UPDATE day_work_records SET order_manual = 1 WHERE order_id = -1;
     UPDATE trips SET order_manual = 1 WHERE order_id = -1;
   `);
+}
+
+// Migrace v8 (oprava po buildu 37503018105):
+// A) Duplicitní práce - stejný den, stroj/práce, jednotka, množství a
+//    pracovník, jedna položka BEZ místa a druhá S místem (pobyt zapsaný
+//    podruhé přes "Zapsat pobyt" / připomenutí, protože položka bez místa se
+//    nepočítala jako zapsaný pobyt). Ponechá se původní (starší) položka a
+//    doplní se jí místo (a ruční zakázka / čas) z duplicity; duplicita jde
+//    do day_work_records_removed. Vyfakturovaná se nikdy neodebere. Podobné
+//    dvojice s jiným množstvím se jen zapíšou do deníku. Každá dvojice ->
+//    ladicí deník (MIGRACE) i s původem (source) obou položek.
+// B) Automatická zakázka se už do DB neukládá (dopočítává se při
+//    zobrazení). Předtím: "Přiřadit i dřívější práci" (build 37503018105)
+//    ukládal order_manual = 0 - takové položky se dohledají podle časové
+//    značky (updated_at po migraci v7, místo patří zakázce) a označí jako
+//    ruční. Pak se automatická přiřazení vymažou (ruční a vyfakturovaná
+//    zůstanou).
+async function migrateV8Duplicates(db: SQLite.SQLiteDatabase): Promise<void> {
+  const now = new Date().toISOString();
+  const log = (detail: string) =>
+    db.runAsync("INSERT INTO debug_log (timestamp, event_type, detail) VALUES (?, 'migration', ?)", [new Date().toISOString(), detail]);
+
+  // B1) NEJDŘÍV (dřív než úpravy v kroku A posunou updated_at):
+  // "Přiřadit i dřívější práci" po migraci v7 -> ruční volba.
+  const v7 = await db.getFirstAsync<{ value: string }>("SELECT value FROM settings WHERE key = 'internal.backup.dochazka-zaloha-pred-etapou-7.db'");
+  const v7At = /^ok (\S+)/.exec(v7?.value ?? '')?.[1] ?? null;
+  let kept = 0;
+  if (v7At) {
+    const r1 = await db.runAsync(
+      `UPDATE day_work_records SET order_manual = 1
+       WHERE order_manual = 0 AND order_id > 0 AND invoice_batch_id IS NULL AND updated_at >= ?
+         AND place_id IN (SELECT place_id FROM order_places WHERE order_id = day_work_records.order_id)`,
+      [v7At]
+    );
+    const r2 = await db.runAsync(
+      `UPDATE trips SET order_manual = 1
+       WHERE order_manual = 0 AND order_id > 0 AND invoice_batch_id IS NULL AND updated_at >= ?
+         AND (to_place_id IN (SELECT place_id FROM order_places WHERE order_id = trips.order_id)
+              OR from_place_id IN (SELECT place_id FROM order_places WHERE order_id = trips.order_id))`,
+      [v7At]
+    );
+    kept = r1.changes + r2.changes;
+  }
+  type Rec = {
+    id: number; date: string; category_id: number; unit: string; quantity: number; worker_id: number; place_id: number | null;
+    source: string; invoice_batch_id: number | null; order_id: number | null; order_manual: number; time_from: string | null; time_to: string | null;
+    name: string | null;
+  };
+  const rows = await db.getAllAsync<Rec>(
+    `SELECT r.id, r.date, r.category_id, r.unit, r.quantity, r.worker_id, r.place_id, r.source, r.invoice_batch_id, r.order_id, r.order_manual,
+            r.time_from, r.time_to, c.name
+     FROM day_work_records r LEFT JOIN work_categories c ON c.id = r.category_id ORDER BY r.id`
+  );
+  const placeless = rows.filter((r) => r.place_id === null);
+  const placed = rows.filter((r) => r.place_id !== null);
+  const used = new Set<number>();
+  let removed = 0;
+  let near = 0;
+  const desc = (r: Rec) => `#${r.id} ${r.place_id === null ? 'bez místa' : `místo ${r.place_id}`}, původ ${r.source}${r.invoice_batch_id ? ', vyfakturováno' : ''}`;
+  for (const a of placeless) {
+    const same = placed.filter(
+      (b) => !used.has(b.id) && b.date === a.date && b.category_id === a.category_id && b.unit === a.unit && b.worker_id === a.worker_id
+    );
+    const b = same.find((x) => Math.abs(x.quantity - a.quantity) < 1e-6);
+    if (!b) {
+      for (const x of same) {
+        near++;
+        await log(`podobná dvojice ponechána (jiné množství) ${a.date} ${a.name ?? ''}: ${desc(a)} ${a.quantity} × ${desc(x)} ${x.quantity} - zkontroluj`);
+      }
+      continue;
+    }
+    used.add(b.id);
+    if (a.invoice_batch_id && b.invoice_batch_id) {
+      await log(`duplicita ponechána (obě vyfakturované) ${a.date} ${a.name ?? ''} ${a.quantity}: ${desc(a)} × ${desc(b)}`);
+      continue;
+    }
+    // ponechat původní (starší), ale nikdy neodebrat vyfakturovanou
+    let keep = a.id < b.id ? a : b;
+    if (keep.invoice_batch_id === null && (keep === a ? b : a).invoice_batch_id !== null) keep = keep === a ? b : a;
+    const drop = keep === a ? b : a;
+    await db.runAsync(
+      `UPDATE day_work_records SET
+         place_id = COALESCE(place_id, ?),
+         order_id = CASE WHEN order_manual = 0 AND invoice_batch_id IS NULL AND ? = 1 THEN ? ELSE order_id END,
+         order_manual = CASE WHEN order_manual = 0 AND invoice_batch_id IS NULL AND ? = 1 THEN 1 ELSE order_manual END,
+         time_from = COALESCE(time_from, ?), time_to = COALESCE(time_to, ?)
+       WHERE id = ?`,
+      [drop.place_id, drop.order_manual, drop.order_id, drop.order_manual, drop.time_from, drop.time_to, keep.id]
+    );
+    await db.runAsync('UPDATE trips SET work_record_id = ? WHERE work_record_id = ?', [keep.id, drop.id]);
+    await db.runAsync(
+      `INSERT OR IGNORE INTO day_work_records_removed (id, date, category_id, quantity, unit, rate_kc, surcharge_pct, source, removed_at, reason)
+       SELECT id, date, category_id, quantity, unit, rate_kc, surcharge_pct, source, ?, ? FROM day_work_records WHERE id = ?`,
+      [now, `duplicita (pobyt zapsán podruhé) - ponechána #${keep.id}`, drop.id]
+    );
+    await db.runAsync('DELETE FROM day_work_records WHERE id = ?', [drop.id]);
+    removed++;
+    await log(`duplicita odebrána ${a.date} ${a.name ?? ''} ${a.quantity}: ponechána ${desc(keep)}, odebrána ${desc(drop)}`);
+  }
+
+  // B2) automatická přiřazení pryč - dopočítávají se při zobrazení.
+  const c1 = await db.runAsync('UPDATE day_work_records SET order_id = NULL WHERE order_manual = 0 AND invoice_batch_id IS NULL AND order_id IS NOT NULL');
+  const c2 = await db.runAsync('UPDATE trips SET order_id = NULL WHERE order_manual = 0 AND invoice_batch_id IS NULL AND order_id IS NOT NULL');
+  await log(
+    `migrace v8: odebráno duplicit ${removed}, podobných ke kontrole ${near}; přiřazení po migraci v7 (${v7At ?? 'čas neznámý'}) ponecháno jako ruční: ${kept}; automatických přiřazení vymazáno (dopočítávají se): ${c1.changes + c2.changes}`
+  );
 }
 
 // Vestavěné šablony strojů (etapa 6) s výchozím servisním plánem -
@@ -2016,14 +2126,21 @@ export async function listRoutePointsForTrips(tripIds: number[]): Promise<Map<nu
 // --- zápis pobytů, učení a připomenutí (etapa 4.3) ---
 
 // Místa, ke kterým už v daný den existuje zápis (pobyt = zapsaný).
+// Jen MOJE zápisy - zápis kolegy na stejném místě neodškrtne můj pobyt.
+// Migrace v8: moje položka BEZ místa = práce dne je zapsaná -> všechny moje
+// pobyty dne se berou jako zapsané (jinak "Zapsat pobyt" / připomenutí
+// nabídly stejnou práci znovu = duplicita).
 export async function recordedPlacesForDate(date: string): Promise<Set<number>> {
   const db = await getDb();
-  const rows = await db.getAllAsync<{ place_id: number }>(
-    // jen MOJE zápisy - zápis kolegy na stejném místě neodškrtne můj pobyt
-    'SELECT DISTINCT place_id FROM day_work_records WHERE date = ? AND place_id IS NOT NULL AND worker_id = 1',
+  const rows = await db.getAllAsync<{ place_id: number | null }>(
+    'SELECT DISTINCT place_id FROM day_work_records WHERE date = ? AND worker_id = 1',
     [date]
   );
-  return new Set(rows.map((r) => r.place_id));
+  const result = new Set(rows.filter((r) => r.place_id !== null).map((r) => r.place_id as number));
+  if (rows.some((r) => r.place_id === null)) {
+    for (const v of await getVisitsForDay(date)) if (v.placeId !== null) result.add(v.placeId);
+  }
+  return result;
 }
 
 export interface PlaceSuggestion {

@@ -11,7 +11,7 @@
 // priceForRecord) - tenhle panel jen sbírá údaje a ukazuje výpočet.
 
 import { useEffect, useState } from 'react';
-import { Alert, FlatList, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import BottomSheetModal from './BottomSheetModal';
 import { KEYBOARD_ACCESSORY_ID } from './KeyboardDoneAccessory';
@@ -296,13 +296,17 @@ export default function WorkItemSheet({
         {locked && <Text style={styles.hint}>Vyfakturováno - sazba se nemění.</Text>}
         {renderAssignment(locked)}
         <View style={styles.buttons}>
-          <TouchableOpacity style={styles.secondaryButton} onPress={() => onDelete(record)}>
-            <Text style={styles.deleteText}>Smazat</Text>
+          <TouchableOpacity style={styles.secondaryButton} onPress={onClose}>
+            <Text style={styles.secondaryButtonText}>Zavřít</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.primaryButton} onPress={() => onSave(record, unit, quantity, assignment())}>
             <Text style={styles.primaryButtonText}>ULOŽIT</Text>
           </TouchableOpacity>
         </View>
+        <TouchableOpacity style={[styles.deleteButton, locked && styles.deleteButtonLocked]} onPress={() => onDelete(record)}>
+          <Text style={styles.deleteButtonText}>SMAZAT POLOŽKU</Text>
+        </TouchableOpacity>
+        {locked && <Text style={styles.hint}>Vyfakturovanou položku nejde smazat.</Text>}
       </ScrollView>
     );
   } else if (mode?.kind === 'add' && category) {
@@ -339,21 +343,17 @@ export default function WorkItemSheet({
             </TouchableOpacity>
           </View>
         )}
-        <FlatList
-          data={categories}
-          keyExtractor={(c) => String(c.id)}
-          style={styles.list}
-          renderItem={({ item }) => (
-            <TouchableOpacity style={styles.pickerRow} onPress={() => pickCategory(item)}>
-              <View style={[styles.colorSwatch, { backgroundColor: item.color }]} />
-              <Text style={styles.pickerRowName}>{item.name}</Text>
-              <Text style={styles.pickerRowRate}>
-                {formatKc(item.rates[item.defaultUnit])} / {UNIT_RATE_LABEL[item.defaultUnit].split('/')[1]}
-              </Text>
-            </TouchableOpacity>
-          )}
-          ListEmptyComponent={<Text style={styles.empty}>Žádné stroje ani práce - přidej je v Nastavení.</Text>}
-        />
+        {/* obyčejný seznam - panel se posouvá celý (BottomSheetModal) */}
+        {categories.map((item) => (
+          <TouchableOpacity key={item.id} style={styles.pickerRow} onPress={() => pickCategory(item)}>
+            <View style={[styles.colorSwatch, { backgroundColor: item.color }]} />
+            <Text style={styles.pickerRowName}>{item.name}</Text>
+            <Text style={styles.pickerRowRate}>
+              {formatKc(item.rates[item.defaultUnit])} / {UNIT_RATE_LABEL[item.defaultUnit].split('/')[1]}
+            </Text>
+          </TouchableOpacity>
+        ))}
+        {categories.length === 0 && <Text style={styles.empty}>Žádné stroje ani práce - přidej je v Nastavení.</Text>}
         <TouchableOpacity style={styles.closeButton} onPress={onClose}>
           <Text style={styles.secondaryButtonText}>Zavřít</Text>
         </TouchableOpacity>
@@ -372,7 +372,6 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(16), letterSpacing: 1, marginBottom: 12 },
   hint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), marginTop: 6, marginBottom: 6 },
   empty: { color: colors.textMuted, textAlign: 'center', fontFamily: fonts.body, marginVertical: 16 },
-  list: { flexGrow: 0 },
   colorSwatch: { width: 14, height: 14, borderRadius: 3 },
   pickerRow: {
     flexDirection: 'row',
@@ -464,6 +463,16 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(15), letterSpacing: 1 },
   secondaryButton: { flex: 1, height: MIN_TOUCH, alignItems: 'center', justifyContent: 'center' },
   secondaryButtonText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(15) },
-  deleteText: { color: colors.danger, fontFamily: fonts.body, fontSize: fs(15) },
+  deleteButton: {
+    height: MIN_TOUCH,
+    borderRadius: radii.card,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+  },
+  deleteButtonLocked: { opacity: 0.4 },
+  deleteButtonText: { color: colors.danger, fontFamily: fonts.headingBold, fontSize: fs(15), letterSpacing: 1 },
   closeButton: { height: MIN_TOUCH, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
 });
