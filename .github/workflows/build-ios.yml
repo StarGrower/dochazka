@@ -13,8 +13,23 @@
 # nemá, je to jen vnitřní technické jméno projektu/schématu/workspace.
 name: Build unsigned iOS .ipa
 
+#
+# RUNNER: pevně macos-26 (arm64), ne macos-latest - "latest" se časem
+# přesune na další verzi macOS/Xcode bez varování. Od 28. 10. 2026 GitHub
+# hlásí "capacity constraints … macOS arm64 runners" a job se nepřidělí;
+# pro ten případ jde ručně (Actions -> Run workflow) zvolit Intel runner
+# macos-26-intel - stejný obraz macOS 26, stejné Xcode 26.6.
+# Xcode 26.6 je ověřené buildem #12 (RN 0.86 chce Xcode >= 16.1).
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: 'macOS runner'
+        type: choice
+        default: macos-26
+        options:
+          - macos-26
+          - macos-26-intel
   push:
     branches: [main]
     paths-ignore:
@@ -26,7 +41,10 @@ concurrency:
 
 jobs:
   build-ios:
-    runs-on: macos-latest
+    runs-on: ${{ inputs.runner || 'macos-26' }}
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,13 +53,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Cache node_modules
         id: cache-node-modules
         uses: actions/cache@v4
         with:
           path: node_modules
-          key: node-modules-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
 
       - name: Install JS dependencies
         if: steps.cache-node-modules.outputs.cache-hit != 'true'
@@ -54,8 +73,11 @@ jobs:
         id: cache-pods
         uses: actions/cache@v4
         with:
-          path: ios/Pods
-          key: pods-${{ hashFiles('ios/Podfile') }}
+          path: |
+            ios/Pods
+            ~/Library/Caches/CocoaPods
+          key: pods-${{ runner.arch }}-${{ hashFiles('ios/Podfile', 'package-lock.json') }}
+          restore-keys: pods-${{ runner.arch }}-
 
       - name: Install CocoaPods
         working-directory: ios
