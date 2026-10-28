@@ -60,7 +60,7 @@ export default function SettingsHubScreen() {
         <SettingsRow
           icon="person"
           title="Moje údaje"
-          description="Jméno, IČO, adresa - hlavička výkazu"
+          description="Jméno, IČO, adresa, účet, splatnost - výkaz a faktura"
           onPress={() => router.push('/settings/odberatele')}
         />
         <SettingsRow

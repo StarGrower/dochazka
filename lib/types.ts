@@ -318,6 +318,11 @@ export interface AppSettings {
   profileAddress: string;
   profilePhone: string;
   profileEmail: string;
+  // --- fakturace (Moje údaje) ---
+  bankAccount: string; // [předčíslí-]číslo/kód banky, '' = nevyplněno (lib/bankAccount.ts)
+  defaultDueDays: number; // výchozí splatnost faktury ve dnech
+  vatPayer: boolean; // vypnuto = na faktuře "Nejsem plátce DPH."
+  registryText: string; // zápis v rejstříku (pod dodavatelem na faktuře)
   // --- Trasy jízd (etapa 3) ---
   routeTrackingEnabled: boolean; // GPS během přejezdu (jen úsporný režim)
   routeQuality: RouteQuality;
@@ -366,6 +371,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   profileAddress: '',
   profilePhone: '',
   profileEmail: '',
+  bankAccount: '',
+  defaultDueDays: 14,
+  vatPayer: false,
+  registryText: 'Fyzická osoba zapsaná v živnostenském rejstříku.',
   routeTrackingEnabled: true,
   routeQuality: 'economical',
   minTripMeters: 300,
