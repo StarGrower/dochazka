@@ -220,12 +220,13 @@ async function migrateAddCategoryKind(db: SQLite.SQLiteDatabase): Promise<void> 
 // telefonu se nesmí ztratit". Migrace samy nic fyzicky nemažou (jen
 // is_deleted / přesun do *_removed tabulek).
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 // Záloha se dělá před první čekající migrací; jméno podle verze, ze které
 // se migruje (existující záloha se nikdy nepřepisuje).
 function backupFileName(fromVersion: number): string {
   if (fromVersion < 2) return 'dochazka-zaloha-pred-opravami-2.db';
   if (fromVersion === 4) return 'dochazka-zaloha-pred-etapami-5-7.db';
+  if (fromVersion === 8) return 'dochazka-zaloha-pred-fakturaci.db';
   // v2 -> "před etapou 3", v3 -> "před etapou 4" (verze DB = číslo etapy)
   return `dochazka-zaloha-pred-etapou-${fromVersion + 1}.db`;
 }
@@ -280,6 +281,10 @@ async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: 
   if (version < 8) {
     await migrateV8Duplicates(db);
     await db.execAsync('PRAGMA user_version = 8');
+  }
+  if (version < 9) {
+    await migrateV9Invoices(db);
+    await db.execAsync('PRAGMA user_version = 9');
   }
 }
 
@@ -901,6 +906,59 @@ async function migrateV7OrderManual(db: SQLite.SQLiteDatabase): Promise<void> {
 //    značky (updated_at po migraci v7, místo patří zakázce) a označí jako
 //    ruční. Pak se automatická přiřazení vymažou (ruční a vyfakturovaná
 //    zůstanou).
+// Migrace v9 - fakturace. Jen PŘIDÁVÁ tabulky (aditivní, nic stávajícího
+// nemění). Odběratelé jsou stávající tabulka `clients` ze zakázek (etapa
+// 5) - zakázky na ně už odkazují, takže se převezmou beze změny.
+//
+// NETRIVIÁLNÍ ROZHODNUTÍ - faktura nese SNÍMEK všeho, co je v PDF
+// (dodavatel z Moje údaje, odběratel, položky, výpis prací po dnech,
+// název zakázky a období). Pozdější změna nastavení, odběratele nebo
+// zápisů práce vystavenou fakturu nezmění - PDF jde kdykoli vygenerovat
+// znovu stejné. Koncept se snímkuje při každém uložení.
+async function migrateV9Invoices(db: SQLite.SQLiteDatabase): Promise<void> {
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS invoices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      number TEXT NOT NULL,
+      order_id INTEGER,
+      client_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'draft',
+      issue_date TEXT NOT NULL,
+      due_days INTEGER NOT NULL DEFAULT 14,
+      due_date TEXT NOT NULL,
+      payment TEXT NOT NULL DEFAULT 'transfer',
+      with_work_log INTEGER NOT NULL DEFAULT 0,
+      total_kc REAL NOT NULL DEFAULT 0,
+      supplier_json TEXT NOT NULL DEFAULT '{}',
+      client_json TEXT NOT NULL DEFAULT '{}',
+      work_log_json TEXT,
+      order_name TEXT,
+      invoice_batch_id INTEGER,
+      issued_at TEXT,
+      paid_at TEXT,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      author_id INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_invoices_number ON invoices (number);
+    CREATE INDEX IF NOT EXISTS idx_invoices_order ON invoices (order_id);
+    CREATE TABLE IF NOT EXISTS invoice_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (${UUID_SQL}),
+      invoice_id INTEGER NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      name TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      quantity REAL NOT NULL DEFAULT 0,
+      unit TEXT NOT NULL DEFAULT 'ks',
+      unit_price_kc REAL NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items (invoice_id);
+  `);
+}
+
 async function migrateV8Duplicates(db: SQLite.SQLiteDatabase): Promise<void> {
   const now = new Date().toISOString();
   const log = (detail: string) =>

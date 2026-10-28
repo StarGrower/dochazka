@@ -209,6 +209,70 @@ export interface InvoiceBatch {
   paidAt: string | null;
 }
 
+// --- fakturace (migrace v9) ---
+
+export type InvoiceStatus = 'draft' | 'issued' | 'paid';
+export type InvoicePayment = 'transfer' | 'cash';
+
+export const INVOICE_UNITS = ['h', 'ks', 'km', 'den', 'Mth', 'm³', 't', 'jízda', 'paušál'] as const;
+
+export interface InvoiceItem {
+  name: string;
+  description: string;
+  quantity: number;
+  unit: string; // INVOICE_UNITS (starší/vlastní text se jen zobrazí)
+  unitPriceKc: number;
+}
+
+export interface InvoiceParty {
+  name: string;
+  address: string;
+  ico: string;
+  dic: string;
+}
+
+// Snímek dodavatele v okamžiku uložení (Nastavení -> Moje údaje).
+export interface InvoiceSupplier extends InvoiceParty {
+  phone: string;
+  email: string;
+  registryText: string;
+  vatPayer: boolean;
+  bankAccount: string; // '' = nevyplněno
+  iban: string | null;
+}
+
+// Řádek výpisu prací: den × druh práce × pracovník (× jednotka).
+export interface WorkLogRow {
+  date: string; // YYYY-MM-DD
+  work: string;
+  worker: string;
+  quantity: number;
+  unit: RateUnit;
+  amountKc: number;
+}
+
+export interface Invoice {
+  id: number | null; // null = ještě neuložená
+  number: string; // číslo faktury = variabilní symbol
+  orderId: number | null;
+  orderName: string | null;
+  clientId: number | null;
+  client: InvoiceParty | null;
+  supplier: InvoiceSupplier;
+  status: InvoiceStatus;
+  issueDate: string; // YYYY-MM-DD
+  dueDays: number;
+  dueDate: string;
+  payment: InvoicePayment;
+  withWorkLog: boolean;
+  workLog: WorkLogRow[] | null; // skutečná práce zakázky (null = bez zakázky)
+  items: InvoiceItem[];
+  totalKc: number;
+  invoiceBatchId: number | null;
+  issuedAt: string | null;
+  paidAt: string | null;
+}
+
 // Pracovník / řidič (etapy 5-7, doplněk "práce mimo moje pobyty").
 export interface Person {
   id: number;

@@ -329,17 +329,27 @@ export default function OrderDetailScreen() {
             <Text style={styles.secondaryText}>Upravit zakázku</Text>
           </TouchableOpacity>
         </View>
+        {workerFilter === null && (
+          <TouchableOpacity
+            style={[styles.secondary, (stats.unbilledKc < 0.5 || busy) && styles.ctaDisabled]}
+            disabled={stats.unbilledKc < 0.5 || busy}
+            onPress={() => setInvoiceOpen(true)}
+          >
+            <Text style={styles.secondaryText}>Jen podklad k faktuře (bez faktury)</Text>
+          </TouchableOpacity>
+        )}
       </ScrollView>
 
+      {/* Faktura za celou zakázku; s filtrem pracovníka jen podklad. */}
       <TouchableOpacity
         style={[styles.cta, (stats.unbilledKc < 0.5 || invoiceBlocked) && styles.ctaDisabled]}
         disabled={stats.unbilledKc < 0.5 || busy || invoiceBlocked}
-        onPress={() => setInvoiceOpen(true)}
+        onPress={() => (workerFilter === null ? router.push(`/invoice/edit?orderId=${order.id}`) : setInvoiceOpen(true))}
       >
         {busy ? (
           <ActivityIndicator color={colors.onAccent} />
         ) : (
-          <Text style={styles.ctaText}>{invoiceBlocked ? 'PEVNÁ CENA - PODKLAD ZA CELOU ZAKÁZKU' : workerName ? `PODKLAD K FAKTUŘE · ${workerName.toUpperCase()}` : 'PŘIPRAVIT PODKLAD K FAKTUŘE'}</Text>
+          <Text style={styles.ctaText}>{invoiceBlocked ? 'PEVNÁ CENA - PODKLAD ZA CELOU ZAKÁZKU' : workerName ? `PODKLAD K FAKTUŘE · ${workerName.toUpperCase()}` : 'VYSTAVIT FAKTURU'}</Text>
         )}
       </TouchableOpacity>
 

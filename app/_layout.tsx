@@ -155,6 +155,7 @@ export default function RootLayout() {
             <Stack.Screen name="fuel/edit" />
             <Stack.Screen name="fuel/stock" />
             <Stack.Screen name="logbook" />
+            <Stack.Screen name="invoice/edit" />
           </Stack>
           {/* Globální "Hotovo" lišta nad číselnou klávesnicí (ČÁST 1 oprava) -
               mountuje se JEDNOU tady, viz components/KeyboardDoneAccessory.tsx. */}
