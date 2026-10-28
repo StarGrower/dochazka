@@ -186,6 +186,7 @@ export interface Order {
   dateTo: string | null;
   note: string;
   placeIds: number[];
+  createdAt: string; // ISO čas vytvoření zakázky
 }
 
 export interface OrderExpense {

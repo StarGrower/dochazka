@@ -57,20 +57,17 @@ export function formatDayHeaderTitle(isoDate: string): string {
 // "9,5 h" nebo "9,5 h · 45 km" (km zatím vždy null, dokud etapa 3
 // nepřidá záznam přejezdů - viz POZNAMKY.md).
 export function formatDayHeaderSummary(hours: number, km: number | null): string {
-  const hoursPart = formatHours(hours);
+  const hoursPart = formatHodiny(hours);
   if (km === null || km <= 0) return hoursPart;
   return `${hoursPart} · ${Math.round(km)} km`;
 }
 
-// Hodiny nikdy se dvěma desetinnými místy (oprava po terénním testu -
-// "8,71 h"): celé a půlhodiny "8 h" / "8,5 h", jinak "8 h 43 min";
-// `compact` (buňka kalendáře) "8:43 h".
-export function formatHours(hours: number, compact = false): string {
-  const totalMin = Math.round(hours * 60);
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  if (m === 0 || m === 30) return `${formatNumberCs(totalMin / 60)} h`;
-  return compact ? `${h}:${String(m).padStart(2, '0')} h` : h > 0 ? `${h} h ${m} min` : `${m} min`;
+// Odpracované hodiny VŠUDE stejně (aplikace, PDF, Excel): desetinně s
+// čárkou na jedno místo - "15,4 h", "8 h", "6,5 h". Ne "15 h 23 min".
+// Zaokrouhluje se jen tady při zobrazení, výpočty jdou z přesné hodnoty.
+export function formatHodiny(hours: number): string {
+  const rounded = Math.round(hours * 10) / 10;
+  return `${formatNumberCs(rounded === 0 ? 0 : rounded)} h`;
 }
 
 export function formatDays(days: number): string {
@@ -78,9 +75,14 @@ export function formatDays(days: number): string {
   return `${rounded.toString().replace('.', ',')} d`;
 }
 
+// Peníze VŠUDE stejně: celé Kč, mezera po tisících i u čtyřmístných
+// ("5 383 Kč" - cs-CZ toLocaleString čtyřmístná čísla neodděluje),
+// záporné s "−", nula vždy "0 Kč" (nikdy "−0"). Náklady se předávají
+// záporně: formatKc(-naklad). Mezera je nezlomitelná (nerozdělí řádek).
 export function formatKc(amount: number): string {
-  const rounded = Math.round(amount);
-  return `${rounded.toLocaleString('cs-CZ')} Kč`;
+  const rounded = Math.round(Math.abs(amount));
+  const digits = String(rounded).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00A0');
+  return `${amount < 0 && rounded !== 0 ? '−' : ''}${digits}\u00A0Kč`;
 }
 
 // --- jednotky položek (oprava 2, C1) ---
@@ -92,7 +94,7 @@ export function formatNumberCs(n: number): string {
 // "8 h", "1 den", "2 dny", "5 dní", "0,5 dne", "120 km"
 export function formatQuantity(quantity: number, unit: RateUnit): string {
   const n = formatNumberCs(quantity);
-  if (unit === 'hour') return formatHours(quantity);
+  if (unit === 'hour') return formatHodiny(quantity);
   if (unit === 'km') return `${n} km`;
   if (!Number.isInteger(quantity)) return `${n} dne`;
   if (quantity === 1) return '1 den';

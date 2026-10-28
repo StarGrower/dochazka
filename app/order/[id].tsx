@@ -13,7 +13,7 @@ import BottomSheetModal from '@/components/BottomSheetModal';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import OrderBadge from '@/components/OrderBadge';
 import { getSettings } from '@/lib/db';
-import { formatKc, formatNumberCs, toIsoDate } from '@/lib/format';
+import { formatHodiny, formatKc, formatNumberCs, toIsoDate } from '@/lib/format';
 import { EXPENSE_LABEL, orderReportHtml, orderReportXlsx, type OrderReportKind } from '@/lib/orderReport';
 import {
   addExpense,
@@ -23,6 +23,7 @@ import {
   getOrderDetail,
   listClients,
   listPeople,
+  orderPeriod,
   setInvoiceBatchPaid,
   type OrderDetail,
 } from '@/lib/orders';
@@ -67,8 +68,9 @@ export default function OrderDetailScreen() {
     );
   }
   const { order, stats } = detail;
-  const from = order.dateFrom ?? detail.firstDate;
-  const subtitle = [order.clientName, from ? `${czDate(from)} – ${order.dateTo ? czDate(order.dateTo) : 'dosud'}` : null].filter(Boolean).join(' · ');
+  const period = orderPeriod(detail);
+  const periodLabel = period.from === period.to ? czDate(period.from) : `${czDate(period.from)} – ${period.to ? czDate(period.to) : 'dosud'}`;
+  const subtitle = [order.clientName, periodLabel].filter(Boolean).join(' · ');
   const budget = order.budgetKc;
   const warn = stats.budgetPct !== null && stats.budgetPct >= BUDGET_WARN_PCT;
   // Pevná cena se fakturuje za celou zakázku, ne po pracovnících.
@@ -180,7 +182,7 @@ export default function OrderDetailScreen() {
                 <Text style={styles.rowText}>{l.name}</Text>
                 <Text style={styles.rq}>{l.quantityLabel}</Text>
               </View>
-              <Text style={styles.rv}>{formatNumberCs(Math.round(l.amountKc))}</Text>
+              <Text style={styles.rv}>{formatKc(l.amountKc)}</Text>
             </View>
           ))}
           {stats.km > 0 && (
@@ -190,7 +192,7 @@ export default function OrderDetailScreen() {
                 <Text style={styles.rowText}>Kilometry</Text>
                 <Text style={styles.rq}>{formatNumberCs(Math.round(stats.km))} km</Text>
               </View>
-              <Text style={styles.rv}>{formatNumberCs(Math.round(stats.kmAmountKc))}</Text>
+              <Text style={styles.rv}>{formatKc(stats.kmAmountKc)}</Text>
             </View>
           )}
           {stats.lines.length === 0 && stats.km === 0 && <Text style={styles.emptyRow}>Zatím žádné zápisy na místech zakázky.</Text>}
@@ -207,19 +209,19 @@ export default function OrderDetailScreen() {
               <Text style={styles.rowText}>Palivo</Text>
               <Text style={styles.rq}>{formatNumberCs(Math.round(stats.fuelLiters))} l</Text>
             </View>
-            <Text style={styles.rv}>−{formatNumberCs(Math.round(stats.fuelCostKc))}</Text>
+            <Text style={styles.rv}>{formatKc(-stats.fuelCostKc)}</Text>
           </View>
           <View style={styles.row}>
             <View style={styles.rn}>
               <Text style={styles.rowText}>Výdaje</Text>
               <Text style={styles.rq}>{stats.expensesByCategory.map((e) => EXPENSE_LABEL[e.category].toLowerCase()).join(', ')}</Text>
             </View>
-            <Text style={styles.rv}>−{formatNumberCs(Math.round(stats.expensesKc))}</Text>
+            <Text style={styles.rv}>{formatKc(-stats.expensesKc)}</Text>
           </View>
           <View style={styles.row}>
             <View style={styles.rn}>
               <Text style={[styles.rowText, styles.tot]}>Výsledek</Text>
-              {stats.kcPerHour !== null && <Text style={styles.rq}>{formatNumberCs(Math.round(stats.kcPerHour))} Kč/h</Text>}
+              {stats.kcPerHour !== null && <Text style={styles.rq}>{formatKc(stats.kcPerHour)}/h</Text>}
             </View>
             <Text style={[styles.rv, styles.rvY]}>{formatKc(stats.resultKc)}</Text>
           </View>
@@ -232,7 +234,7 @@ export default function OrderDetailScreen() {
               {stats.people.map((p, i) => (
                 <View key={p.name} style={[styles.row, i === 0 && styles.rowFirst]}>
                   <Text style={styles.rowText}>{p.name}</Text>
-                  <Text style={styles.rv}>{formatNumberCs(Math.round(p.hours * 10) / 10)} h</Text>
+                  <Text style={styles.rv}>{formatHodiny(p.hours)}</Text>
                 </View>
               ))}
             </View>
@@ -266,7 +268,7 @@ export default function OrderDetailScreen() {
                   {e.invoiceBatchId ? ' · vyúčtováno' : ''}
                 </Text>
               </View>
-              <Text style={styles.rv}>{formatNumberCs(Math.round(e.amountKc))}</Text>
+              <Text style={styles.rv}>{formatKc(e.amountKc)}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -305,7 +307,10 @@ export default function OrderDetailScreen() {
               {stats.days.slice(0, 31).map((x, i) => (
                 <TouchableOpacity key={x.date} style={[styles.row, i === 0 && styles.rowFirst]} onPress={() => router.push(`/day/${x.date}`)}>
                   <Text style={styles.rowText}>{czDateYear(x.date)}</Text>
-                  <Text style={styles.rv}>{formatNumberCs(Math.round(x.amountKc))} ›</Text>
+                  <Text style={styles.rv}>
+                    {x.hours > 0 ? `${formatHodiny(x.hours)} · ` : ''}
+                    {formatKc(x.amountKc)} ›
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>

@@ -104,8 +104,8 @@ export function logbookHtml(input: LogbookExportInput): string {
   return `<!doctype html><html><head><meta charset="utf-8"/><style>
   @page{size:A4 landscape;margin:14mm}
   body{font-family:-apple-system,Helvetica,sans-serif;color:#131311;font-size:10px}
-  .head{background:#131311;border-radius:8px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:16px}
-  .who{color:#F3F1EA;font-size:10px;text-align:right}
+  .head{border-bottom:3px solid #F2B705;padding:0 0 10px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+  .who{color:#131311;font-size:10px;text-align:right}
   h1{font-size:18px;margin:14px 0 4px} h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#6b685f;margin:14px 0 4px}
   .meta{font-size:10px;color:#6b685f}
   table{width:100%;border-collapse:collapse} th{text-align:left;font-size:9px;color:#6b685f;border-bottom:2px solid #F2B705;padding:4px 3px}

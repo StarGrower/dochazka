@@ -65,15 +65,25 @@ export interface OrderStats {
   resultKc: number;
   kcPerHour: number | null;
   people: { name: string; hours: number }[];
-  days: { date: string; amountKc: number }[];
+  // hours = součet hodinových zápisů dne (všechny práce a lidé), items =
+  // rozpis po druzích práce (pro PDF, když je jich víc než jeden).
+  days: { date: string; amountKc: number; hours: number; items: { name: string; quantityLabel: string }[] }[];
   budgetPct: number | null; // ratesTotal / rozpočet
 }
+
+// "8 h", "8 h + 1 den" - množství jednoho druhu práce ve všech jednotkách.
+const quantityLabel = (e: { hour: number; day: number; km: number }) =>
+  [e.hour > 0 ? formatQuantity(e.hour, 'hour') : null, e.day > 0 ? formatQuantity(e.day, 'day') : null, e.km > 0 ? formatQuantity(e.km, 'km') : null]
+    .filter(Boolean)
+    .join(' + ');
 
 const amount = (r: Pick<StatsRecord, 'quantity' | 'rateKc' | 'surchargePct'>) => r.quantity * r.rateKc * (1 + r.surchargePct / 100);
 
 export function computeOrderStats(input: OrderStatsInput): OrderStats {
   const byCategory = new Map<number, { name: string; color: string; hour: number; day: number; km: number; amountKc: number }>();
   const byDay = new Map<string, number>();
+  const hoursByDay = new Map<string, number>();
+  const itemsByDay = new Map<string, Map<number, { name: string; hour: number; day: number; km: number }>>();
   const byPerson = new Map<number, number>();
   let hours = 0;
   let unbilledRates = 0;
@@ -85,7 +95,13 @@ export function computeOrderStats(input: OrderStatsInput): OrderStats {
     entry.amountKc += a;
     byCategory.set(r.categoryId, entry);
     byDay.set(r.date, (byDay.get(r.date) ?? 0) + a);
+    const dayItems = itemsByDay.get(r.date) ?? new Map();
+    const item = dayItems.get(r.categoryId) ?? { name: r.categoryName, hour: 0, day: 0, km: 0 };
+    item[r.unit] += r.quantity;
+    dayItems.set(r.categoryId, item);
+    itemsByDay.set(r.date, dayItems);
     if (r.unit === 'hour') {
+      hoursByDay.set(r.date, (hoursByDay.get(r.date) ?? 0) + r.quantity);
       hours += r.quantity;
       byPerson.set(r.workerId, (byPerson.get(r.workerId) ?? 0) + r.quantity);
     }
@@ -107,9 +123,7 @@ export function computeOrderStats(input: OrderStatsInput): OrderStats {
       categoryId,
       name: e.name,
       color: e.color,
-      quantityLabel: [e.hour > 0 ? formatQuantity(e.hour, 'hour') : null, e.day > 0 ? formatQuantity(e.day, 'day') : null, e.km > 0 ? formatQuantity(e.km, 'km') : null]
-        .filter(Boolean)
-        .join(' + '),
+      quantityLabel: quantityLabel(e),
       amountKc: e.amountKc,
     }))
     .sort((a, b) => b.amountKc - a.amountKc);
@@ -140,7 +154,14 @@ export function computeOrderStats(input: OrderStatsInput): OrderStats {
     resultKc,
     kcPerHour: hours > 0 ? resultKc / hours : null,
     people: [...byPerson.entries()].map(([id, h]) => ({ name: input.people.get(id) ?? 'Neznámý', hours: h })).sort((a, b) => b.hours - a.hours),
-    days: [...byDay.entries()].map(([date, amountKc]) => ({ date, amountKc })).sort((a, b) => b.date.localeCompare(a.date)),
+    days: [...byDay.entries()]
+      .map(([date, amountKc]) => ({
+        date,
+        amountKc,
+        hours: hoursByDay.get(date) ?? 0,
+        items: [...(itemsByDay.get(date)?.values() ?? [])].map((i) => ({ name: i.name, quantityLabel: quantityLabel(i) })),
+      }))
+      .sort((a, b) => b.date.localeCompare(a.date)),
     budgetPct: budget && budget > 0 ? (ratesTotalKc / budget) * 100 : null,
   };
 }

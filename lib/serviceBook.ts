@@ -42,7 +42,7 @@ export function serviceBookHtml(
     .join('');
   return `<!doctype html><html><head><meta charset="utf-8"/><style>
   body{font-family:-apple-system,Helvetica,sans-serif;color:#131311;margin:28px;font-size:11px}
-  .head{background:#131311;border-radius:8px;padding:14px 16px}
+  .head{border-bottom:3px solid #F2B705;padding:0 0 10px}
   h1{font-size:20px;margin:16px 0 6px} h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#6b685f;margin:18px 0 4px}
   table{width:100%;border-collapse:collapse} th{text-align:left;font-size:10px;color:#6b685f;border-bottom:1px solid #ccc;padding:4px}
   td{padding:5px 4px;border-bottom:1px solid #eee;vertical-align:top} .foot{margin-top:24px;font-size:9px;color:#8b877c}

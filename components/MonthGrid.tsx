@@ -7,7 +7,7 @@
 
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import { formatHours, weekdayShort } from '@/lib/format';
+import { formatHodiny, weekdayShort } from '@/lib/format';
 import { holidayName, isWeekend } from '@/lib/holidays';
 import type { MonthDaySummary } from '@/lib/types';
 import { colors, fonts, radii, fs } from '@/theme';
@@ -117,7 +117,7 @@ export default function MonthGrid({ year, month, summary, todayIso, onSelectDay,
                 {holiday && <View style={[styles.holidayBar, isToday && styles.holidayBarToday]} />}
                 {hasRecord && daySummary.hours > 0 && (
                   <Text style={[styles.dayHours, isToday && styles.dayHoursToday]}>
-                    {formatHours(daySummary.hours, true)}
+                    {formatHodiny(daySummary.hours)}
                   </Text>
                 )}
               </TouchableOpacity>

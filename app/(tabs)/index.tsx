@@ -16,7 +16,7 @@ import MonthGrid from '@/components/MonthGrid';
 import { isBackupConfigured } from '@/lib/backup';
 import { getInternalValue, getMonthSummary, getMonthTripKm, getSettings, isDatabaseEmpty, setInternalValue } from '@/lib/db';
 import { runHealthChecks, type HealthCheck } from '@/lib/health';
-import { formatHours, monthNameUpper, todayIso } from '@/lib/format';
+import { formatHodiny, monthNameUpper, todayIso } from '@/lib/format';
 import type { MonthDaySummary } from '@/lib/types';
 import { colors, fonts, radii, MIN_TOUCH, fs } from '@/theme';
 
@@ -118,7 +118,7 @@ export default function CalendarScreen() {
       </View>
 
       <View style={styles.summaryRow}>
-        <SummaryCard label="ODPRACOVÁNO" value={formatHours(monthTotal.hours)} accent />
+        <SummaryCard label="ODPRACOVÁNO" value={formatHodiny(monthTotal.hours)} accent />
         <SummaryCard label="NAJETO KM" value={`${Math.round(monthTotal.km)} km`} />
         <SummaryCard label="PRACOVNÍCH DNÍ" value={String(monthTotal.workDays)} />
       </View>

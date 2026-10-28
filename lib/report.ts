@@ -191,11 +191,15 @@ export async function collectReport(options: ReportOptions): Promise<ReportData>
 
 export const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-export const LOGO_SVG = `<svg viewBox="0 0 400 100" width="200" height="50" xmlns="http://www.w3.org/2000/svg">
+// Logo do PDF - tisk na bílý papír (tmavé pozadí hlavičky tisk vynechá):
+// tmavý text #131311, žlutá zůstává, mezera mezi O a D bílá, ručičky
+// tmavé. Nápis má pevnou šířku (textLength) - když tiskárna nemá Barlow
+// Condensed a vezme širší písmo, nápis se zúží, místo aby se usekl.
+export const LOGO_SVG = `<svg viewBox="0 0 410 100" width="205" height="50" xmlns="http://www.w3.org/2000/svg">
 <g transform="rotate(-12 30 50)"><rect x="12" y="20" width="10" height="60" rx="5" fill="#F2B705"/><path d="M23 22a28 28 0 0 1 0 56z" fill="#F2B705"/><path d="M29 46h13v8H29z" fill="#131311" opacity=".25"/></g>
-<circle cx="72" cy="52" r="25" fill="#131311" stroke="#131311" stroke-width="12"/><circle cx="72" cy="52" r="25" fill="none" stroke="#F2B705" stroke-width="10"/>
-<path d="M72 52V39" stroke="#F3F1EA" stroke-width="6" stroke-linecap="round"/><path d="M72 52h10" stroke="#F3F1EA" stroke-width="6" stroke-linecap="round"/>
-<text x="106" y="81" font-family="Barlow Condensed, Arial Narrow, sans-serif" font-weight="800" font-size="86" letter-spacing="1" fill="#F3F1EA">CHÁZKA</text></svg>`;
+<circle cx="72" cy="52" r="25" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="12"/><circle cx="72" cy="52" r="25" fill="none" stroke="#F2B705" stroke-width="10"/>
+<path d="M72 52V39" stroke="#131311" stroke-width="6" stroke-linecap="round"/><path d="M72 52h10" stroke="#131311" stroke-width="6" stroke-linecap="round"/>
+<text x="106" y="81" textLength="296" lengthAdjust="spacingAndGlyphs" font-family="Barlow Condensed, Arial Narrow, sans-serif" font-weight="800" font-size="86" letter-spacing="1" fill="#131311">CHÁZKA</text></svg>`;
 
 // Trasa bez mapového podkladu (offline) - jednoduchá projekce do SVG.
 function routeSvg(routes: [number, number][][]): string {
@@ -310,8 +314,8 @@ export async function reportHtml(data: ReportData, settings: AppSettings): Promi
 
   return `<!doctype html><html><head><meta charset="utf-8"/><style>
   body{font-family:-apple-system,Helvetica,sans-serif;color:#131311;margin:28px;font-size:11px}
-  .head{background:#131311;border-radius:8px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px}
-  .who{color:#F3F1EA;font-size:10px;text-align:right;max-width:55%}
+  .head{border-bottom:3px solid #F2B705;padding:0 0 10px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+  .who{color:#131311;font-size:10px;text-align:right;max-width:55%}
   h1{font-size:18px;margin:18px 0 8px}
   .sum{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #F2B705;padding:6px 0 8px;font-size:13px}
   .total{font-size:20px;font-weight:700}
@@ -370,7 +374,12 @@ export function reportCsv(data: ReportData): string {
 
 const xmlEsc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-function sheetXml(rows: string[][]): string {
+// Formát sloupce v Excelu: 'kc' = "5 383 Kč", 'h' = "15,4 h" (buňka
+// zůstává číslem, jde sčítat).
+export type XlsxColumnFormat = 'kc' | 'h';
+const FORMAT_STYLE: Record<XlsxColumnFormat, number> = { kc: 2, h: 3 };
+
+function sheetXml(rows: string[][], formats: Partial<Record<number, XlsxColumnFormat>> = {}): string {
   const colName = (i: number) => String.fromCharCode(65 + i); // výkaz má méně než 26 sloupců
   const body = rows
     .map((row, r) => {
@@ -378,8 +387,9 @@ function sheetXml(rows: string[][]): string {
         .map((value, c) => {
           const ref = `${colName(c)}${r + 1}`;
           const numeric = r > 0 && /^-?\d+(,\d+)?$/.test(value);
+          const fmt = formats[c];
           return numeric
-            ? `<c r="${ref}"><v>${value.replace(',', '.')}</v></c>`
+            ? `<c r="${ref}"${fmt ? ` s="${FORMAT_STYLE[fmt]}"` : ''}><v>${value.replace(',', '.')}</v></c>`
             : `<c r="${ref}" t="inlineStr"${r === 0 ? ' s="1"' : ''}><is><t>${xmlEsc(value)}</t></is></c>`;
         })
         .join('');
@@ -398,7 +408,7 @@ export function reportXlsx(data: ReportData): Uint8Array {
 }
 
 // Obecný zápis XLSX (sdílí výkaz pro šéfa a export zakázky).
-export function xlsxFromSheets(sheets: { name: string; rows: string[][] }[]): Uint8Array {
+export function xlsxFromSheets(sheets: { name: string; rows: string[][]; formats?: Partial<Record<number, XlsxColumnFormat>> }[]): Uint8Array {
   const files: Record<string, Uint8Array> = {
     '[Content_Types].xml': strToU8(
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`
@@ -413,11 +423,11 @@ export function xlsxFromSheets(sheets: { name: string; rows: string[][] }[]): Ui
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`
     ),
     'xl/styles.xml': strToU8(
-      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="2"><xf fontId="0"/><xf fontId="1" applyFont="1"/></cellXfs></styleSheet>`
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="2"><numFmt numFmtId="164" formatCode="#,##0\\ &quot;Kč&quot;"/><numFmt numFmtId="165" formatCode="General\\ &quot;h&quot;"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="4"><xf fontId="0"/><xf fontId="1" applyFont="1"/><xf numFmtId="164" fontId="0" applyNumberFormat="1"/><xf numFmtId="165" fontId="0" applyNumberFormat="1"/></cellXfs></styleSheet>`
     ),
   };
   sheets.forEach((s, i) => {
-    files[`xl/worksheets/sheet${i + 1}.xml`] = strToU8(sheetXml(s.rows));
+    files[`xl/worksheets/sheet${i + 1}.xml`] = strToU8(sheetXml(s.rows, s.formats));
   });
   return zipSync(files);
 }

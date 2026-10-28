@@ -51,10 +51,11 @@ interface OrderRow {
   date_to: string | null;
   note: string;
   place_ids: string | null;
+  created_at: string;
 }
 
 const ORDER_SELECT = `SELECT o.id, o.name, o.client_id, c.name as client_name, o.status, o.price_mode, o.fixed_price_kc, o.budget_kc,
-    o.date_from, o.date_to, o.note, (SELECT group_concat(place_id) FROM order_places WHERE order_id = o.id) as place_ids
+    o.date_from, o.date_to, o.note, o.created_at, (SELECT group_concat(place_id) FROM order_places WHERE order_id = o.id) as place_ids
   FROM orders o LEFT JOIN clients c ON c.id = o.client_id`;
 
 function mapOrder(r: OrderRow): Order {
@@ -71,6 +72,7 @@ function mapOrder(r: OrderRow): Order {
     dateTo: r.date_to,
     note: r.note,
     placeIds: r.place_ids ? r.place_ids.split(',').map(Number) : [],
+    createdAt: r.created_at,
   };
 }
 
@@ -85,7 +87,7 @@ export async function getOrder(id: number): Promise<Order | null> {
   return row ? mapOrder(row) : null;
 }
 
-export type OrderFields = Omit<Order, 'id' | 'clientName'>;
+export type OrderFields = Omit<Order, 'id' | 'clientName' | 'createdAt'>;
 
 export async function saveOrder(id: number | null, f: OrderFields): Promise<number> {
   const db = await getDb();
@@ -502,6 +504,20 @@ export async function getOrderDetail(orderId: number, workerId: number | null = 
   });
   const dates = [...records.map((r) => r.date), ...trips.map((t) => toIsoDate(new Date(t.start_at)))].sort();
   return { order, stats, expenses, batches, firstDate: dates[0] ?? null, lastDate: dates[dates.length - 1] ?? null };
+}
+
+// Období zakázky pro zobrazení i exporty: od nejstaršího do nejnovějšího
+// dne práce přiřazené k zakázce (zápisy + přejezdy, stejné dny jako "Po
+// dnech"); běžící zakázka končí "dosud" (to = null). Bez přiřazené práce
+// datum vytvoření. Ruční "od/do" zakázky slouží jen k přiřazování práce -
+// "od" se při založení předvyplní dneškem a nesmí přebít skutečnou práci.
+export function orderPeriod(d: OrderDetail): { from: string; to: string | null } {
+  const running = d.order.status === 'preparing' || d.order.status === 'running';
+  if (!d.firstDate || !d.lastDate) {
+    const created = toIsoDate(new Date(d.order.createdAt));
+    return { from: created, to: running ? null : created };
+  }
+  return { from: d.firstDate, to: running ? null : d.lastDate };
 }
 
 // Přehled pro seznam (nevyfakturováno, čeká na platbu, rozpočet).
