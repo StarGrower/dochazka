@@ -9,19 +9,20 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
+import InvoiceItemsEditor, { itemToRow, rowToItem, type ItemRow } from '@/components/InvoiceItemsEditor';
 import InvoicePreview from '@/components/InvoicePreview';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import ToggleRow from '@/components/ToggleRow';
-import { addDaysIso, czDate, formatDecimal, hoursMismatch, invoiceTotal, isValidInvoiceNumber, itemTotal, parseCzDate } from '@/lib/invoiceCalc';
+import { addDaysIso, czDate, formatDecimal, hoursMismatch, invoiceTotal, isValidInvoiceNumber, itemTotal, parseCzDate, parseDecimal } from '@/lib/invoiceCalc';
 import { invoiceFontsCss } from '@/lib/invoiceFonts';
 import { invoiceHtml, kcInvoice } from '@/lib/invoiceReport';
 import { clientParty, deleteInvoice, findDraftForOrder, getInvoice, invoiceNumberTaken, issueInvoice, newInvoice, refreshDraft, saveInvoice, setInvoicePaid } from '@/lib/invoices';
-import { listClients } from '@/lib/orders';
+import { listClients, saveClient } from '@/lib/orders';
 import { A4_NO_MARGINS, sharePdfFromHtml } from '@/lib/shareFile';
-import type { Client, Invoice, InvoicePayment } from '@/lib/types';
+import type { Client, Invoice, InvoiceParty, InvoicePayment } from '@/lib/types';
 import { colors, fonts, fs, MIN_TOUCH, radii } from '@/theme';
 
 const DUE_CHOICES = [7, 14, 30];
@@ -36,6 +37,8 @@ export default function InvoiceEditScreen() {
   const [takenNumbers, setTakenNumbers] = useState<Record<string, boolean>>({});
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [rows, setRows] = useState<ItemRow[]>([]);
+  const [newClient, setNewClient] = useState<InvoiceParty | null>(null);
 
   // Načte se jednou při otevření (ne při každém návratu na obrazovku -
   // přepsalo by to rozepsané úpravy).
@@ -55,10 +58,18 @@ export default function InvoiceEditScreen() {
       }
       if (loaded.id !== null) loaded = await refreshDraft(loaded);
       setInv(loaded);
+      setRows(loaded.items.map(itemToRow));
       setIssueText(czDate(loaded.issueDate));
       setDaysText(String(loaded.dueDays));
     })();
   }, [params.id, params.orderId]);
+
+  // Seznam odběratelů znovu po návratu ze "Spravovat odběratele".
+  useFocusEffect(
+    useCallback(() => {
+      listClients().then(setClients);
+    }, [])
+  );
 
   // Duplicita čísla - hlídá se průběžně (výsledek podle čísla).
   const checkNumber = inv && inv.status === 'draft' && isValidInvoiceNumber(inv.number) ? inv.number : null;
@@ -71,6 +82,11 @@ export default function InvoiceEditScreen() {
       live = false;
     };
   }, [checkNumber, invId]);
+
+  const changeRows = (next: ItemRow[]) => {
+    setRows(next);
+    setInv((v) => (v ? { ...v, items: next.map(rowToItem) } : v));
+  };
 
   const update = useCallback((patch: Partial<Invoice>) => setInv((v) => (v ? { ...v, ...patch } : v)), []);
 
@@ -93,6 +109,18 @@ export default function InvoiceEditScreen() {
   const mismatch = fromOrder ? hoursMismatch(inv.items, inv.workLog) : null;
   const current = (): Invoice => ({ ...inv, dueDate, totalKc: total });
 
+  // Nový odběratel z faktury se uloží do seznamu odběratelů.
+  const withClient = async (): Promise<Invoice> => {
+    if (!newClient || !newClient.name.trim()) return current();
+    const party = { name: newClient.name.trim(), address: newClient.address.trim(), ico: newClient.ico.trim(), dic: newClient.dic.trim() };
+    const clientId = await saveClient({ ...party, note: '' });
+    setClients(await listClients());
+    setNewClient(null);
+    const next = { ...current(), clientId, client: party };
+    setInv(next);
+    return next;
+  };
+
   const setIssue = (text: string) => {
     setIssueText(text);
     const iso = parseCzDate(text);
@@ -113,11 +141,15 @@ export default function InvoiceEditScreen() {
       Alert.alert('Číslo faktury', `Faktura č. ${inv.number} už existuje - zvol jiné číslo.`);
       return false;
     }
+    if (rows.some((r) => parseDecimal(r.quantity) === null || parseDecimal(r.unitPrice) === null)) {
+      Alert.alert('Položky', 'Množství a cena musí být číslo (desetinná čárka), např. 6,5.');
+      return false;
+    }
     if (!issueOk) {
       Alert.alert('Datum vystavení', 'Zadej datum ve tvaru d. m. rrrr, např. 28. 10. 2026.');
       return false;
     }
-    if (forIssue && !(inv.client?.name ?? '').trim()) {
+    if (forIssue && !(newClient?.name ?? inv.client?.name ?? '').trim()) {
       Alert.alert('Odběratel', 'Vyber odběratele faktury.');
       return false;
     }
@@ -132,7 +164,7 @@ export default function InvoiceEditScreen() {
     if (!validate(false)) return;
     setBusy(true);
     try {
-      const id = await saveInvoice(current());
+      const id = await saveInvoice(await withClient());
       update({ id });
       Alert.alert('Koncept uložen', `Faktura č. ${inv.number} je uložená jako koncept.`);
     } finally {
@@ -145,7 +177,8 @@ export default function InvoiceEditScreen() {
   const openPreview = async () => {
     setBusy(true);
     try {
-      setPreviewHtml(await html(current(), 'preview'));
+      const party = newClient && newClient.name.trim() ? newClient : inv.client;
+      setPreviewHtml(await html({ ...current(), client: party }, 'preview'));
     } finally {
       setBusy(false);
     }
@@ -162,7 +195,7 @@ export default function InvoiceEditScreen() {
       setPreviewHtml(null);
       setBusy(true);
       try {
-        const issued = await issueInvoice(current());
+        const issued = await issueInvoice(await withClient());
         setInv(issued);
         await sharePdf(issued);
       } catch (err) {
@@ -217,7 +250,10 @@ export default function InvoiceEditScreen() {
     if (fresh) setInv(fresh);
   };
 
-  const pickClient = (c: Client) => update({ clientId: c.id, client: clientParty(c) });
+  const pickClient = (c: Client) => {
+    setNewClient(null);
+    update({ clientId: c.id, client: clientParty(c) });
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -241,20 +277,48 @@ export default function InvoiceEditScreen() {
                   </TouchableOpacity>
                 );
               })}
-              {clients.length === 0 && <Text style={styles.hint}>Zatím žádný odběratel.</Text>}
+              <TouchableOpacity
+                style={[styles.chip, newClient !== null && styles.chipOn]}
+                onPress={() => setNewClient((c) => c ?? { name: '', address: '', ico: '', dic: '' })}
+              >
+                <Text style={[styles.chipText, newClient !== null && styles.chipTextOn]}>+ Nový odběratel</Text>
+              </TouchableOpacity>
             </View>
           ) : null}
-          {inv.client && (
+          {draft && newClient && (
+            <View style={styles.newClient}>
+              {(['name', 'address', 'ico', 'dic'] as const).map((field) => (
+                <TextInput
+                  key={field}
+                  style={styles.clientInput}
+                  value={newClient[field]}
+                  onChangeText={(t) => setNewClient((c) => (c ? { ...c, [field]: t } : c))}
+                  placeholder={{ name: 'Jméno / firma', address: 'Adresa', ico: 'IČO', dic: 'DIČ (nepovinné)' }[field]}
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType={field === 'ico' ? 'number-pad' : 'default'}
+                  multiline={field === 'address'}
+                  inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+                />
+              ))}
+              <Text style={styles.hintInline}>Uloží se do seznamu odběratelů s fakturou.</Text>
+            </View>
+          )}
+          {inv.client && !newClient && (
             <Text style={styles.party}>
               {[inv.client.name, inv.client.address, inv.client.ico ? `IČO ${inv.client.ico}` : '', inv.client.dic ? `DIČ ${inv.client.dic}` : ''].filter(Boolean).join(' · ')}
             </Text>
           )}
         </View>
+        {draft && (
+          <TouchableOpacity onPress={() => router.push('/invoice/clients')} hitSlop={6}>
+            <Text style={styles.link}>Spravovat odběratele ›</Text>
+          </TouchableOpacity>
+        )}
 
         <Text style={styles.section}>CO SE FAKTURUJE</Text>
         <View style={styles.group}>
-          {inv.items.length === 0 && <Text style={styles.hint}>Zatím žádná položka.</Text>}
-          {inv.items.map((i, idx) => (
+          {draft && <InvoiceItemsEditor rows={rows} onChange={changeRows} />}
+          {!draft && inv.items.map((i, idx) => (
             <View key={idx} style={[styles.itemRow, idx > 0 && styles.itemBorder]}>
               <View style={styles.itemText}>
                 <Text style={styles.itemName}>{i.name || '—'}</Text>
@@ -433,6 +497,10 @@ const styles = StyleSheet.create({
   chipOn: { backgroundColor: colors.accent, borderColor: colors.accent },
   chipText: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(14) },
   chipTextOn: { color: colors.onAccent },
+  newClient: { paddingHorizontal: 14, paddingBottom: 12, gap: 8 },
+  clientInput: { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderRadius: radii.card, color: colors.text, fontFamily: fonts.body, fontSize: fs(15), minHeight: MIN_TOUCH, paddingHorizontal: 10 },
+  hintInline: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12) },
+  link: { color: colors.accent, fontFamily: fonts.bodySemiBold, fontSize: fs(13), paddingVertical: 4 },
   party: { color: colors.text, fontFamily: fonts.body, fontSize: fs(14), paddingHorizontal: 14, paddingBottom: 12 },
   hint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(13), paddingHorizontal: 14, paddingBottom: 12, paddingTop: 2 },
   hintStrong: { color: colors.text, fontFamily: fonts.bodySemiBold },

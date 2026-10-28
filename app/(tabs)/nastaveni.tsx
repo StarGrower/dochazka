@@ -64,6 +64,12 @@ export default function SettingsHubScreen() {
           onPress={() => router.push('/settings/odberatele')}
         />
         <SettingsRow
+          icon="building.2"
+          title="Odběratelé"
+          description="Jméno/firma, adresa, IČO, DIČ - pro zakázky a faktury"
+          onPress={() => router.push('/invoice/clients')}
+        />
+        <SettingsRow
           icon="gearshape"
           title="Aplikace"
           description="Písmo, ladicí deník, reset"

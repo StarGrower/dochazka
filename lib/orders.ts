@@ -36,6 +36,13 @@ export async function saveClient(c: Omit<Client, 'id'> & { id?: number | null })
   return r.lastInsertRowId;
 }
 
+// Měkké smazání - zakázky a vystavené faktury si odběratele nechají
+// (faktura má jeho údaje ve snímku).
+export async function deleteClient(id: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE clients SET is_deleted = 1, updated_at = ? WHERE id = ?', [new Date().toISOString(), id]);
+}
+
 // --- zakázky ---
 
 interface OrderRow {

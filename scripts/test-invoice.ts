@@ -258,6 +258,25 @@ const tests: Array<[string, () => void]> = [
     // každý řádek výpisu právě jednou
     assert.equal((html.match(/<td class="nw">/g) ?? []).length, 60);
   }],
+  ['faktura bez zakázky: vlastní položky, součet = částka i v QR, bez výpisu prací', () => {
+    const items = [
+      { name: 'Přeprava bagru', description: '', quantity: 1, unit: 'paušál', unitPriceKc: 2500 },
+      { name: 'Práce bagrem', description: 'výkop přípojky', quantity: parseDecimal('6,5') as number, unit: 'h', unitPriceKc: 1100 },
+      { name: 'Štěrk', description: '', quantity: 2.25, unit: 'm³', unitPriceKc: 480.4 },
+    ];
+    const total = invoiceTotal(items);
+    assert.equal(total, 10730.9);
+    const inv = sampleInvoice({ orderId: null, orderName: null, workLog: null, withWorkLog: true, items, totalKc: total });
+    const html = invoiceHtml(inv, { mode: 'print' });
+    assert.equal(invoicePageCount(inv), 1);
+    assert.doesNotMatch(html, /Výpis prací|Příloha:/);
+    assert.match(html, /6,5\u00A0h/);
+    assert.match(html, /2,25\u00A0m³/);
+    assert.match(html, /10\u00A0730,90\u00A0Kč/);
+    const spayd = buildSpayd({ iban: 'CZ6508000000192000145399', amountKc: total, vs: inv.number, dueDate: inv.dueDate, message: `Faktura ${inv.number}` });
+    assert.match(spayd, /\*AM:10730\.90\*/);
+    assert.equal(hoursMismatch(items, null), null);
+  }],
   ['stránkování: součty na poslední straně, jinak strana navíc', () => {
     assert.deepEqual(paginate([1, 1, 1], () => 10, 25, 25, 0).map((p) => p.length), [2, 1]);
     assert.deepEqual(paginate([1, 1], () => 10, 25, 25, 10).map((p) => p.length), [2, 0]);

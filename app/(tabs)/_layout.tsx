@@ -1,5 +1,5 @@
 // Dolní lišta (vizuální směr "A · Stavba"): Kalendář / Zakázky (etapa 5)
-// / Stroje (etapa 6) / Nastavení - podle předlohy zakázek.
+// / Fakturace / Stroje (etapa 6) / Nastavení - podle předlohy zakázek.
 
 import { SymbolView } from 'expo-symbols';
 import { Tabs } from 'expo-router';
@@ -41,6 +41,15 @@ export default function TabLayout() {
           title: 'Zakázky',
           tabBarIcon: ({ color }) => (
             <SymbolView name={{ ios: 'briefcase', android: 'work', web: 'work' }} tintColor={color} size={26} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="faktury"
+        options={{
+          title: 'Fakturace',
+          tabBarIcon: ({ color }) => (
+            <SymbolView name={{ ios: 'doc.text', android: 'receipt_long', web: 'receipt_long' }} tintColor={color} size={26} />
           ),
         }}
       />

@@ -1431,3 +1431,25 @@ lib/
 
 Napiš, co sedí a co ne (barvy, rozměry, chování "upravit" přepínače) -
 pak navážu etapou 2 (uložená místa).
+
+## Fakturace (migrace v9)
+
+- Nastavení → Moje údaje: číslo účtu (mod 11, neplatné se neuloží), výchozí
+  splatnost, Plátce DPH, text o zápisu v rejstříku. IBAN a QR Platba
+  (SPAYD 1.0) se počítají offline (`lib/bankAccount.ts`, `lib/spayd.ts`).
+- Záložka Fakturace: seznam faktur, „+ Nová faktura“ (bez zakázky),
+  Odběratelé. Faktura ze zakázky: detail zakázky → VYSTAVIT FAKTURU.
+- NETRIVIÁLNÍ ROZHODNUTÍ - odběratelé = stávající tabulka `clients` ze
+  zakázek (žádná nová tabulka, zakázky na ni už odkazují).
+- NETRIVIÁLNÍ ROZHODNUTÍ - faktura nese snímek dodavatele, odběratele,
+  položek a výpisu prací (`invoices`, `invoice_items`), vystavená se už
+  nemění; PDF je čistá funkce těch dat (`lib/invoiceReport.ts`).
+- NETRIVIÁLNÍ ROZHODNUTÍ - vystavení faktury ze zakázky = podklad k
+  faktuře na částku faktury; označí přesně zápisy a přejezdy z výpisu
+  prací. Nevyfakturováno pak ukazuje jen novou práci (u pevné ceny pevná
+  cena minus vyfakturováno). Zrušení faktury podklad zruší; zrušení
+  podkladu v detailu zakázky vrátí fakturu na koncept.
+- PDF: stránky A4 skládané v HTML (pevná výška, odhad výšky řádků),
+  aby šlo „Strana X z Y“ a opakované záhlaví výpisu. Tisk 595 × 842 b
+  bez okrajů, stránky zmenšené CSS zoomem. Náhled = stejné HTML ve WebView.
+- Testy: `npm run test:invoice`.
