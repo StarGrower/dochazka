@@ -14,11 +14,12 @@
 name: Build unsigned iOS .ipa
 
 #
-# RUNNER: pevně macos-26 (arm64), ne macos-latest - "latest" se časem
+# RUNNER: pevně macos-26-intel, ne macos-latest - "latest" se časem
 # přesune na další verzi macOS/Xcode bez varování. Od 28. 10. 2026 GitHub
-# hlásí "capacity constraints … macOS arm64 runners" a job se nepřidělí;
-# pro ten případ jde ručně (Actions -> Run workflow) zvolit Intel runner
-# macos-26-intel - stejný obraz macOS 26, stejné Xcode 26.6.
+# u arm64 (macos-latest / macos-26) hlásí "capacity constraints … macOS
+# arm64 runners" a job se vůbec nepřidělí; Intel runner (stejný obraz
+# macOS 26, stejné Xcode 26.6) job bere hned, build ~30 min. Až se arm64
+# uvolní, jde ručně (Actions -> Run workflow) zvolit macos-26 (rychlejší).
 # Xcode 26.6 je ověřené buildem #12 (RN 0.86 chce Xcode >= 16.1).
 on:
   workflow_dispatch:
@@ -26,7 +27,7 @@ on:
       runner:
         description: 'macOS runner'
         type: choice
-        default: macos-26
+        default: macos-26-intel
         options:
           - macos-26
           - macos-26-intel
@@ -41,7 +42,7 @@ concurrency:
 
 jobs:
   build-ios:
-    runs-on: ${{ inputs.runner || 'macos-26' }}
+    runs-on: ${{ inputs.runner || 'macos-26-intel' }}
     timeout-minutes: 45
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
