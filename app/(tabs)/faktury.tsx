@@ -1,4 +1,4 @@
-// Fakturace - seznam faktur (koncepty, vystavené, zaplacené), souhrn
+// Fakturace - seznam faktur (koncepty, vystavené, zaplacené, zrušené), souhrn
 // nezaplaceno / po splatnosti, "+ Nová faktura" bez zakázky (faktura ze
 // zakázky se zakládá v detailu zakázky) a odběratelé. Styl jako Zakázky.
 
@@ -14,13 +14,14 @@ import { formatKc, todayIso } from '@/lib/format';
 import type { Invoice } from '@/lib/types';
 import { colors, fonts, fs, MIN_TOUCH, radii } from '@/theme';
 
-type Filter = 'all' | 'draft' | 'unpaid' | 'paid';
+type Filter = 'all' | 'draft' | 'unpaid' | 'paid' | 'cancelled';
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'Vše' },
   { key: 'unpaid', label: 'Nezaplacené' },
   { key: 'draft', label: 'Koncepty' },
   { key: 'paid', label: 'Zaplacené' },
+  { key: 'cancelled', label: 'Zrušené' },
 ];
 
 export default function InvoicesScreen() {
@@ -78,19 +79,21 @@ export default function InvoicesScreen() {
         )}
         {visible.map((i) => {
           const late = i.status === 'issued' && i.dueDate < today;
-          const label = i.status === 'draft' ? 'KONCEPT' : i.status === 'paid' ? 'ZAPLACENO' : late ? 'PO SPLATNOSTI' : `SPLATNÁ ${czDate(i.dueDate)}`;
+          const label =
+            i.status === 'draft' ? 'KONCEPT' : i.status === 'paid' ? 'ZAPLACENO' : i.status === 'cancelled' ? 'ZRUŠENÁ' : late ? 'PO SPLATNOSTI' : `SPLATNÁ ${czDate(i.dueDate)}`;
+          // Koncept číslo nemá (přidělí se při vystavení), jen ručně zadané.
           return (
             <TouchableOpacity key={i.id} style={styles.it} onPress={() => router.push(`/invoice/edit?id=${i.id}`)}>
               <View style={styles.nameBlock}>
                 <Text style={styles.nm}>
-                  č. {i.number}
+                  {i.status === 'draft' && !i.numberManual ? 'Koncept' : `č. ${i.number}`}
                   {i.client?.name ? ` · ${i.client.name}` : ''}
                 </Text>
                 <Text style={styles.od}>{[czDate(i.issueDate), i.orderName ? `zakázka ${i.orderName}` : 'bez zakázky'].join(' · ')}</Text>
               </View>
               <View>
-                <Text style={[styles.am, i.status === 'paid' && styles.green, i.status === 'draft' && styles.muted]}>{kcInvoice(i.totalKc)}</Text>
-                <Text style={[styles.amLabel, late && styles.red]}>{label}</Text>
+                <Text style={[styles.am, i.status === 'paid' && styles.green, (i.status === 'draft' || i.status === 'cancelled') && styles.muted, i.status === 'cancelled' && styles.strike]}>{kcInvoice(i.totalKc)}</Text>
+                <Text style={[styles.amLabel, (late || i.status === 'cancelled') && styles.red]}>{label}</Text>
               </View>
             </TouchableOpacity>
           );
@@ -118,6 +121,7 @@ const styles = StyleSheet.create({
   red: { color: colors.danger },
   green: { color: '#4CAF78' },
   muted: { color: colors.textMuted },
+  strike: { textDecorationLine: 'line-through' },
   kl: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(11), letterSpacing: 0.66, marginTop: 2 },
   flt: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingBottom: 12, flexWrap: 'wrap' },
   fc: { height: 36, paddingHorizontal: 14, borderRadius: radii.card, borderWidth: 1, borderColor: colors.border, justifyContent: 'center' },

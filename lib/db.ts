@@ -220,13 +220,14 @@ async function migrateAddCategoryKind(db: SQLite.SQLiteDatabase): Promise<void> 
 // telefonu se nesmí ztratit". Migrace samy nic fyzicky nemažou (jen
 // is_deleted / přesun do *_removed tabulek).
 
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 // Záloha se dělá před první čekající migrací; jméno podle verze, ze které
 // se migruje (existující záloha se nikdy nepřepisuje).
 function backupFileName(fromVersion: number): string {
   if (fromVersion < 2) return 'dochazka-zaloha-pred-opravami-2.db';
   if (fromVersion === 4) return 'dochazka-zaloha-pred-etapami-5-7.db';
   if (fromVersion === 8) return 'dochazka-zaloha-pred-fakturaci.db';
+  if (fromVersion === 9) return 'dochazka-zaloha-pred-upravou-fakturace.db';
   // v2 -> "před etapou 3", v3 -> "před etapou 4" (verze DB = číslo etapy)
   return `dochazka-zaloha-pred-etapou-${fromVersion + 1}.db`;
 }
@@ -285,6 +286,10 @@ async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: 
   if (version < 9) {
     await migrateV9Invoices(db);
     await db.execAsync('PRAGMA user_version = 9');
+  }
+  if (version < 10) {
+    await migrateV10InvoiceStates(db);
+    await db.execAsync('PRAGMA user_version = 10');
   }
 }
 
@@ -956,6 +961,29 @@ async function migrateV9Invoices(db: SQLite.SQLiteDatabase): Promise<void> {
       unit_price_kc REAL NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items (invoice_id);
+  `);
+}
+
+// Migrace v10 - úprava fakturace (aditivní sloupce):
+// - number_manual: číslo zadané ručně (0 = koncept dostane při vystavení
+//   další volné číslo z řady)
+// - zrušená faktura zůstává (status 'cancelled', cancelled_at) - její číslo
+//   se nikdy znovu nepoužije; dřív zrušené (is_deleted) vystavené faktury
+//   se převedou na zrušené
+// - zbytek hodin při nižší fakturaci (remainder_*): 'carry' = nechat k
+//   fakturaci později, 'writeoff' = odepsat; carry_json = zbytky jiných
+//   faktur převzaté touto fakturou
+async function migrateV10InvoiceStates(db: SQLite.SQLiteDatabase): Promise<void> {
+  await addColumnIfMissing(db, 'invoices', 'number_manual', 'INTEGER NOT NULL DEFAULT 1');
+  await addColumnIfMissing(db, 'invoices', 'cancelled_at', 'TEXT');
+  await addColumnIfMissing(db, 'invoices', 'remainder_mode', 'TEXT');
+  await addColumnIfMissing(db, 'invoices', 'remainder_hours', 'REAL');
+  await addColumnIfMissing(db, 'invoices', 'remainder_rate_kc', 'REAL');
+  await addColumnIfMissing(db, 'invoices', 'remainder_work', 'TEXT');
+  await addColumnIfMissing(db, 'invoices', 'remainder_consumed_by', 'INTEGER');
+  await addColumnIfMissing(db, 'invoices', 'carry_json', 'TEXT');
+  await db.execAsync(`
+    UPDATE invoices SET status = 'cancelled', cancelled_at = updated_at, is_deleted = 0 WHERE is_deleted = 1 AND issued_at IS NOT NULL;
   `);
 }
 

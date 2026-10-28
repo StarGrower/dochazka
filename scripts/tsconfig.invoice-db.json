@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "outDir": "../node_modules/.cache/dochazka-invoice-db",
+    "rootDir": "..",
+    "baseUrl": "..",
+    "paths": { "@/*": ["./*"] },
+    "module": "commonjs",
+    "target": "es2020",
+    "moduleResolution": "node",
+    "ignoreDeprecations": "6.0",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "types": ["node"]
+  },
+  "files": ["test-invoice-db.ts"]
+}

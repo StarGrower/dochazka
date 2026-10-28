@@ -1,7 +1,11 @@
-// Faktura (koncept / vystavená) - podle předlohy predloha-faktura.html:
+// Faktura (koncept / vystavená / zrušená) - podle předlohy predloha-faktura.html:
 // odběratel, co se fakturuje, číslo faktury = VS, datum vystavení,
 // splatnost (dny + 7/14/30), forma úhrady, příloha "výpis prací po dnech",
-// náhled PDF, sdílení (= vystavení) a uložení konceptu.
+// náhled PDF, sdílení, uložení konceptu a vystavení.
+//
+// Sdílení konceptu nic nemění (PDF s nápisem KONCEPT). Teprve "Vystavit
+// fakturu" fakturu zamkne, přidělí číslo z řady a odečte práci
+// z Nevyfakturováno; při nižších hodinách se zeptá, co se zbytkem.
 //
 // Parametry: ?id= (uložená faktura), ?orderId= (nová ze zakázky - když už
 // koncept ze zakázky existuje, otevře se ten), bez parametrů = bez zakázky.
@@ -19,14 +23,28 @@ import ToggleRow from '@/components/ToggleRow';
 import { addDaysIso, czDate, formatDecimal, hoursMismatch, invoiceTotal, isValidInvoiceNumber, itemTotal, parseCzDate, parseDecimal } from '@/lib/invoiceCalc';
 import { invoiceFontsCss } from '@/lib/invoiceFonts';
 import { invoiceHtml, kcInvoice } from '@/lib/invoiceReport';
-import { clientParty, deleteInvoice, findDraftForOrder, getInvoice, invoiceNumberTaken, issueInvoice, newInvoice, refreshDraft, saveInvoice, setInvoicePaid } from '@/lib/invoices';
+import {
+  cancelInvoice,
+  clientParty,
+  deleteDraft,
+  findDraftForOrder,
+  getInvoice,
+  invoiceNumberTaken,
+  issueInvoice,
+  newInvoice,
+  prepareIssue,
+  refreshDraft,
+  saveInvoice,
+  setInvoicePaid,
+  suggestInvoiceNumber,
+} from '@/lib/invoices';
 import { listClients, saveClient } from '@/lib/orders';
 import { A4_NO_MARGINS, sharePdfFromHtml } from '@/lib/shareFile';
-import type { Client, Invoice, InvoiceParty, InvoicePayment } from '@/lib/types';
+import type { Client, Invoice, InvoiceParty, InvoicePayment, RemainderMode } from '@/lib/types';
 import { colors, fonts, fs, MIN_TOUCH, radii } from '@/theme';
 
 const DUE_CHOICES = [7, 14, 30];
-const STATUS_LABEL = { draft: 'KONCEPT', issued: 'VYSTAVENO', paid: 'ZAPLACENO' } as const;
+const STATUS_LABEL = { draft: 'KONCEPT', issued: 'VYSTAVENO', paid: 'ZAPLACENO', cancelled: 'ZRUŠENÁ' } as const;
 
 export default function InvoiceEditScreen() {
   const params = useLocalSearchParams<{ id?: string; orderId?: string }>();
@@ -71,8 +89,8 @@ export default function InvoiceEditScreen() {
     }, [])
   );
 
-  // Duplicita čísla - hlídá se průběžně (výsledek podle čísla).
-  const checkNumber = inv && inv.status === 'draft' && isValidInvoiceNumber(inv.number) ? inv.number : null;
+  // Duplicita ručně zadaného čísla - hlídá se průběžně (výsledek podle čísla).
+  const checkNumber = inv && inv.status === 'draft' && inv.numberManual && isValidInvoiceNumber(inv.number) ? inv.number : null;
   const invId = inv?.id ?? null;
   useEffect(() => {
     if (checkNumber === null) return;
@@ -102,11 +120,11 @@ export default function InvoiceEditScreen() {
   const fromOrder = inv.orderId !== null;
   const total = invoiceTotal(inv.items);
   const numberOk = isValidInvoiceNumber(inv.number);
-  const numberTaken = draft && numberOk && takenNumbers[inv.number] === true;
+  const numberTaken = draft && inv.numberManual && numberOk && takenNumbers[inv.number] === true;
   const issueOk = parseCzDate(issueText) !== null;
   const dueDate = addDaysIso(inv.issueDate, inv.dueDays);
   const noAccount = inv.payment === 'transfer' && !inv.supplier.iban;
-  const mismatch = fromOrder ? hoursMismatch(inv.items, inv.workLog) : null;
+  const mismatch = fromOrder ? hoursMismatch(inv.items, inv.workLog, inv.carries) : null;
   const current = (): Invoice => ({ ...inv, dueDate, totalKc: total });
 
   // Nový odběratel z faktury se uloží do seznamu odběratelů.
@@ -138,7 +156,7 @@ export default function InvoiceEditScreen() {
       return false;
     }
     if (numberTaken) {
-      Alert.alert('Číslo faktury', `Faktura č. ${inv.number} už existuje - zvol jiné číslo.`);
+      Alert.alert('Číslo faktury', `Faktura č. ${inv.number} už byla vystavená (i zrušená čísla se znovu nepoužívají) - zvol jiné.`);
       return false;
     }
     if (rows.some((r) => parseDecimal(r.quantity) === null || parseDecimal(r.unitPrice) === null)) {
@@ -166,7 +184,7 @@ export default function InvoiceEditScreen() {
     try {
       const id = await saveInvoice(await withClient());
       update({ id });
-      Alert.alert('Koncept uložen', `Faktura č. ${inv.number} je uložená jako koncept.`);
+      Alert.alert('Koncept uložen', 'Koncept faktury je uložený. Číslo se přidělí až při vystavení.');
     } finally {
       setBusy(false);
     }
@@ -188,36 +206,13 @@ export default function InvoiceEditScreen() {
     await sharePdfFromHtml(await html(doc, 'print'), `Faktura-${doc.number}`, `Faktura č. ${doc.number}`, A4_NO_MARGINS);
   };
 
-  // Sdílení konceptu = vystavení (zafixuje snímek, ze zakázky vytvoří podklad).
-  const issueAndShare = async () => {
-    if (!validate(true)) return;
-    const go = async () => {
-      setPreviewHtml(null);
-      setBusy(true);
-      try {
-        const issued = await issueInvoice(await withClient());
-        setInv(issued);
-        await sharePdf(issued);
-      } catch (err) {
-        Alert.alert('Faktura se nevystavila', err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(false);
-      }
-    };
-    const extra = [
-      fromOrder ? 'Práce ve výpisu se označí jako vyfakturovaná a odečte se z „Nevyfakturováno“.' : '',
-      noAccount ? 'Chybí číslo účtu - faktura bude bez QR Platby.' : '',
-    ].filter(Boolean);
-    Alert.alert(`Vystavit fakturu č. ${inv.number}?`, [`Částka ${kcInvoice(total)}.`, ...extra].join('\n\n'), [
-      { text: 'Zrušit', style: 'cancel' },
-      { text: 'Vystavit a sdílet', onPress: go },
-    ]);
-  };
-
-  const shareAgain = async () => {
+  // PDF konceptu (s nápisem KONCEPT) - nic se neukládá ani nemění.
+  const shareCurrent = async () => {
+    setPreviewHtml(null);
     setBusy(true);
     try {
-      await sharePdf(inv);
+      const party = newClient && newClient.name.trim() ? newClient : inv.client;
+      await sharePdf(draft ? { ...current(), client: party } : inv);
     } catch (err) {
       Alert.alert('Sdílení se nepovedlo', err instanceof Error ? err.message : String(err));
     } finally {
@@ -225,19 +220,88 @@ export default function InvoiceEditScreen() {
     }
   };
 
+  // Vystavení: (zbytek hodin?) -> potvrzení -> vystavit -> nabídnout sdílení.
+  const issue = async () => {
+    if (!validate(true)) return;
+    setPreviewHtml(null);
+    const party = newClient && newClient.name.trim() ? newClient : inv.client;
+    const { invoice: ready, remainder } = await prepareIssue({ ...current(), client: party });
+    const amount = kcInvoice(invoiceTotal(ready.items));
+
+    const go = async (mode: RemainderMode | null) => {
+      setBusy(true);
+      try {
+        const base = await withClient();
+        const issued = await issueInvoice({ ...base, items: ready.items }, mode);
+        setInv(issued);
+        Alert.alert(`Faktura č. ${issued.number} je vystavená`, 'Poslat PDF odběrateli?', [
+          { text: 'Později', style: 'cancel' },
+          {
+            text: 'Sdílet PDF',
+            onPress: () =>
+              sharePdf(issued).catch((err) => Alert.alert('Sdílení se nepovedlo', err instanceof Error ? err.message : String(err))),
+          },
+        ]);
+      } catch (err) {
+        Alert.alert('Faktura se nevystavila', err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    const confirm = (mode: RemainderMode | null) => {
+      const extra = [
+        fromOrder ? 'Práce ve výpisu se odečte z „Nevyfakturováno“.' : '',
+        mode === 'carry' && remainder ? `Zbytek ${formatDecimal(remainder.hours)} h zůstane k fakturaci později.` : '',
+        mode === 'writeoff' && remainder ? `Zbytek ${formatDecimal(remainder.hours)} h se odepíše (sleva).` : '',
+        noAccount ? 'Chybí číslo účtu - faktura bude bez QR Platby.' : '',
+      ].filter(Boolean);
+      Alert.alert(`Vystavit fakturu č. ${ready.number} na ${amount}?`, ['Potom už nepůjde měnit.', ...extra].join('\n\n'), [
+        { text: 'Zrušit', style: 'cancel' },
+        { text: 'Vystavit', onPress: () => go(mode) },
+      ]);
+    };
+
+    if (remainder) {
+      const workHours = formatDecimal(remainder.hours + (hoursMismatch(ready.items, ready.workLog, ready.carries)?.itemHours ?? 0));
+      const itemHours = formatDecimal(hoursMismatch(ready.items, ready.workLog, ready.carries)?.itemHours ?? 0);
+      Alert.alert(`Odpracováno ${workHours} h, fakturuješ ${itemHours} h.`, `Co se zbytkem ${formatDecimal(remainder.hours)} h?`, [
+        { text: 'Nechat k fakturaci později', onPress: () => confirm('carry') },
+        { text: 'Odepsat (sleva)', onPress: () => confirm('writeoff') },
+        { text: 'Zpět', style: 'cancel' },
+      ]);
+    } else confirm(null);
+  };
+
+  const resetNumber = async () => update({ numberManual: false, number: await suggestInvoiceNumber(inv.issueDate) });
+
   const remove = () => {
-    const issued = !draft;
+    if (draft) {
+      Alert.alert('Smazat koncept?', undefined, [
+        { text: 'Ne', style: 'cancel' },
+        {
+          text: 'Smazat',
+          style: 'destructive',
+          onPress: async () => {
+            await deleteDraft(inv);
+            router.back();
+          },
+        },
+      ]);
+      return;
+    }
     Alert.alert(
-      issued ? `Zrušit fakturu č. ${inv.number}?` : 'Smazat koncept?',
-      issued ? (fromOrder ? 'Práce ze zakázky bude zase nevyfakturovaná.' : 'Faktura zmizí ze seznamu.') : undefined,
+      `Zrušit fakturu č. ${inv.number}?`,
+      ['Faktura zůstane v seznamu jako zrušená, její číslo se už nepoužije.', fromOrder ? 'Práce ze zakázky bude zase nevyfakturovaná.' : ''].filter(Boolean).join('\n\n'),
       [
         { text: 'Ne', style: 'cancel' },
         {
-          text: issued ? 'Zrušit fakturu' : 'Smazat',
+          text: 'Zrušit fakturu',
           style: 'destructive',
           onPress: async () => {
-            await deleteInvoice(inv);
-            router.back();
+            await cancelInvoice(inv);
+            const fresh = inv.id !== null ? await getInvoice(inv.id) : null;
+            if (fresh) setInv(fresh);
           },
         },
       ]
@@ -260,10 +324,16 @@ export default function InvoiceEditScreen() {
       <ScreenHeader
         title="FAKTURA"
         subtitle={fromOrder ? `Ze zakázky ${inv.orderName ?? ''}` : 'Bez zakázky'}
-        right={<Text style={[styles.status, inv.status === 'paid' && styles.statusPaid]}>{STATUS_LABEL[inv.status]}</Text>}
+        right={<Text style={[styles.status, inv.status === 'paid' && styles.statusPaid, inv.status === 'cancelled' && styles.statusCancelled]}>{STATUS_LABEL[inv.status]}</Text>}
       />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        {!draft && <Text style={styles.hint}>Vystavená faktura se už nemění - PDF jde kdykoli sdílet znovu stejné.</Text>}
+        {inv.status === 'cancelled' && <Text style={styles.cancelled}>Faktura je zrušená - její číslo se už nepoužije. PDF jde sdílet s nápisem ZRUŠENO.</Text>}
+        {(inv.status === 'issued' || inv.status === 'paid') && <Text style={styles.hint}>Vystavená faktura se už nemění - PDF jde kdykoli sdílet znovu stejné.</Text>}
+        {inv.remainder && (
+          <Text style={styles.hint}>
+            Zbytek {formatDecimal(inv.remainder.hours)} h: {inv.remainder.mode === 'carry' ? 'ponechán k fakturaci později' : 'odepsán (sleva)'}.
+          </Text>
+        )}
 
         <Text style={styles.section}>ODBĚRATEL</Text>
         <View style={styles.group}>
@@ -348,7 +418,7 @@ export default function InvoiceEditScreen() {
             <TextInput
               style={styles.fieldInput}
               value={inv.number}
-              onChangeText={(t) => update({ number: t.trim() })}
+              onChangeText={(t) => update({ number: t.trim(), numberManual: true })}
               keyboardType="number-pad"
               maxLength={10}
               editable={draft}
@@ -356,6 +426,12 @@ export default function InvoiceEditScreen() {
             />
           </View>
           {!numberOk && <Text style={styles.error}>Jen číslice, nejvýš 10.</Text>}
+          {draft && !inv.numberManual && <Text style={styles.hint}>Přidělí se při vystavení - další volné číslo z řady.</Text>}
+          {draft && inv.numberManual && (
+            <TouchableOpacity onPress={resetNumber} hitSlop={6}>
+              <Text style={[styles.hint, styles.linkText]}>Vlastní číslo · vrátit automatické z řady ›</Text>
+            </TouchableOpacity>
+          )}
           {numberOk && numberTaken && <Text style={styles.error}>Faktura s tímto číslem už existuje.</Text>}
           <View style={[styles.field, styles.fieldBorder]}>
             <Text style={styles.fieldLabel}>Datum vystavení</Text>
@@ -442,26 +518,30 @@ export default function InvoiceEditScreen() {
           <TouchableOpacity style={styles.secondary} onPress={openPreview} disabled={busy}>
             <Text style={styles.secondaryText}>NÁHLED PDF</Text>
           </TouchableOpacity>
-          {draft ? (
+          {draft && (
             <>
-              <TouchableOpacity style={styles.primary} onPress={issueAndShare} disabled={busy}>
-                {busy ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.primaryText}>SDÍLET FAKTURU (PDF)</Text>}
+              <TouchableOpacity style={styles.secondary} onPress={shareCurrent} disabled={busy}>
+                <Text style={styles.secondaryText}>SDÍLET KONCEPT (PDF)</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.secondary} onPress={saveDraft} disabled={busy}>
                 <Text style={styles.secondaryText}>ULOŽIT KONCEPT</Text>
               </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              <TouchableOpacity style={styles.primary} onPress={shareAgain} disabled={busy}>
-                {busy ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.primaryText}>SDÍLET ZNOVU (PDF)</Text>}
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.secondary} onPress={togglePaid} disabled={busy}>
-                <Text style={styles.secondaryText}>{inv.status === 'paid' ? 'OZNAČIT NEZAPLACENO' : 'OZNAČIT ZAPLACENO'}</Text>
+              <TouchableOpacity style={styles.primary} onPress={issue} disabled={busy}>
+                {busy ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.primaryText}>VYSTAVIT FAKTURU</Text>}
               </TouchableOpacity>
             </>
           )}
-          {inv.id !== null && (
+          {!draft && (
+            <TouchableOpacity style={styles.primary} onPress={shareCurrent} disabled={busy}>
+              {busy ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.primaryText}>SDÍLET (PDF)</Text>}
+            </TouchableOpacity>
+          )}
+          {(inv.status === 'issued' || inv.status === 'paid') && (
+            <TouchableOpacity style={styles.secondary} onPress={togglePaid} disabled={busy}>
+              <Text style={styles.secondaryText}>{inv.status === 'paid' ? 'OZNAČIT NEZAPLACENO' : 'OZNAČIT ZAPLACENO'}</Text>
+            </TouchableOpacity>
+          )}
+          {inv.id !== null && inv.status !== 'cancelled' && (
             <TouchableOpacity style={styles.danger} onPress={remove} disabled={busy}>
               <Text style={styles.dangerText}>{draft ? 'Smazat koncept' : 'Zrušit fakturu'}</Text>
             </TouchableOpacity>
@@ -472,11 +552,8 @@ export default function InvoiceEditScreen() {
       <InvoicePreview
         html={previewHtml}
         title={`FAKTURA ${inv.number}`}
-        shareLabel={draft ? 'Vystavit' : 'Sdílet'}
-        onShare={draft ? issueAndShare : () => {
-          setPreviewHtml(null);
-          shareAgain();
-        }}
+        shareLabel="Sdílet"
+        onShare={shareCurrent}
         onClose={() => setPreviewHtml(null)}
       />
     </SafeAreaView>
@@ -490,6 +567,9 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: 16, paddingBottom: 32, gap: 8 },
   status: { color: colors.textMuted, fontFamily: fonts.headingBold, fontSize: fs(13), letterSpacing: 1 },
   statusPaid: { color: '#4CAF78' },
+  statusCancelled: { color: colors.danger },
+  cancelled: { color: colors.danger, fontFamily: fonts.bodySemiBold, fontSize: fs(13), marginTop: 6 },
+  linkText: { color: colors.accent },
   section: { color: colors.textMuted, fontFamily: fonts.headingBold, fontSize: fs(15), letterSpacing: 1.2, marginTop: 10 },
   group: { backgroundColor: colors.card, borderRadius: radii.card, overflow: 'hidden' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 14, paddingVertical: 10 },

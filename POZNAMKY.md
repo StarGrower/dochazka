@@ -1452,4 +1452,19 @@ pak navážu etapou 2 (uložená místa).
 - PDF: stránky A4 skládané v HTML (pevná výška, odhad výšky řádků),
   aby šlo „Strana X z Y“ a opakované záhlaví výpisu. Tisk 595 × 842 b
   bez okrajů, stránky zmenšené CSS zoomem. Náhled = stejné HTML ve WebView.
-- Testy: `npm run test:invoice`.
+- Úprava (migrace v10): VYSTAVENÍ ≠ SDÍLENÍ. Koncept jde sdílet kdykoli
+  (PDF s šikmým nápisem KONCEPT) a nic nemění ani nerezervuje číslo.
+  „Vystavit fakturu“ (potvrzení) zamkne fakturu, přidělí další číslo z
+  řady (ručně zadané jen když je volné) a odečte z Nevyfakturováno.
+- NETRIVIÁLNÍ ROZHODNUTÍ - zbytek hodin při nižší fakturaci: zápisy se
+  nedělí (docházka se nemění), všechny ve výpisu se označí jako
+  vyfakturované a zbytek („nechat k fakturaci později“) se uloží k
+  faktuře jako hodiny × průměrná hodinová sazba. Patří do Nevyfakturováno
+  a příští faktura ze zakázky ho předvyplní jako položku a převezme
+  (remainder_consumed_by). „Odepsat (sleva)“ = jen uložená volba.
+- Zrušená faktura zůstává (stav cancelled, PDF s nápisem ZRUŠENO); řadu
+  čísel tvoří všechny kdy vystavené faktury včetně zrušených, takže se
+  číslo nikdy nepoužije znovu. Zrušení vrátí práci i převzaté zbytky
+  k fakturaci. Zrušení podkladu v detailu zakázky = zrušení faktury.
+- Testy: `npm run test:invoice` (čisté výpočty a PDF), `npm run
+  test:invoice-db` (faktury nad skutečnou SQLite přes node:sqlite).

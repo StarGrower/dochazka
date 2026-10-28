@@ -285,7 +285,7 @@ export default function OrderDetailScreen() {
                   </View>
                   <TouchableOpacity
                     onPress={() =>
-                      Alert.alert(`Podklad ${formatKc(b.totalKc)}`, b.note || undefined, [
+                      Alert.alert(`Podklad ${formatKc(b.totalKc)}`, [b.note, b.note.startsWith('Faktura č.') ? 'Zrušením podkladu se zruší i faktura (zůstane v seznamu jako zrušená).' : ''].filter(Boolean).join('\n\n') || undefined, [
                         { text: 'Zavřít', style: 'cancel' },
                         { text: b.status === 'paid' ? 'Označit nezaplaceno' : 'Označit zaplaceno', onPress: async () => { await setInvoiceBatchPaid(b, b.status !== 'paid'); await load(); } },
                         { text: 'Zrušit podklad', style: 'destructive', onPress: async () => { await deleteInvoiceBatch(b); await load(); } },

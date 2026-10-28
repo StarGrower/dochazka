@@ -11,7 +11,8 @@
 // viewport (ostré písmo, jde přiblížit prsty).
 //
 // HTML je čistá funkce dat faktury (snímek v DB), takže PDF jde kdykoli
-// vygenerovat znovu stejné.
+// vygenerovat znovu stejné. Koncept má přes každou stranu šikmý světle šedý
+// nápis KONCEPT, zrušená faktura ZRUŠENO.
 
 import { formatIban } from './bankAccount';
 import { czDate, czDateWithWeekday, daysLabel, formatDecimal, itemTotal, periodLabel, quantityTotalsLabel, summarizeWorkLog, workLogRate, type WorkLogGroup } from './invoiceCalc';
@@ -118,11 +119,17 @@ export function invoiceHtml(inv: Invoice, opts: InvoiceHtmlOptions): string {
   const showLog = inv.withWorkLog && inv.workLog !== null && inv.orderId !== null;
   const log = showLog ? (inv.workLog as WorkLogRow[]) : [];
   const summary = summarizeWorkLog(log);
+  const watermark = inv.status === 'draft' ? 'KONCEPT' : inv.status === 'cancelled' ? 'ZRUŠENO' : '';
+  const wm = watermark ? `<div class="wm" aria-hidden="true"><span>${watermark}</span></div>` : '';
+  const carried = inv.carries.reduce((s, c) => s + c.hours, 0);
+  const carryNote = showLog && carried > 0
+    ? `<div class="cnote">Navíc fakturováno ${esc(formatQuantity(carried, 'hour'))} dříve nevyfakturované práce (${inv.carries.map((c) => `z faktury č. ${esc(c.number)}`).join(', ')}).</div>`
+    : '';
 
   const items = inv.items.filter((i) => i.name.trim() || i.quantity !== 0 || i.unitPriceKc !== 0);
   const itemPages = paginate(items, itemHeight, INNER - FOOT - P1_HEAD - THEAD - SAFETY, INNER - FOOT - CONT_HEAD - THEAD - SAFETY, ITEMS_TAIL);
   const recapRows = Math.max(summary.byWork.length, summary.byWorker.length);
-  const logTail = 44 + 28 + 22 + recapRows * 32 + 8;
+  const logTail = 44 + 28 + 22 + recapRows * 32 + 8 + (carryNote ? 40 : 0);
   const logPages = showLog ? paginate(log, () => LOG_ROW, INNER - FOOT - CONT_HEAD - THEAD - SAFETY, INNER - FOOT - CONT_HEAD - THEAD - SAFETY, logTail) : [];
   const pageCount = itemPages.length + logPages.length;
   const logFirstPage = itemPages.length + 1;
@@ -187,7 +194,7 @@ export function invoiceHtml(inv: Invoice, opts: InvoiceHtmlOptions): string {
   </div>`
         : `<div class="p2h"><div><h2>Faktura č. ${no}</h2><p>Pokračování položek</p></div>${MARK}</div><div class="bar bar2"></div>`;
     const table = chunk.length > 0 ? `<table>${itemsHead}<tbody>${itemRows(chunk)}</tbody></table>` : '';
-    pages.push(`<section class="page">${head}${table}${last ? tail : ''}${foot(idx + 1, idx > 0)}</section>`);
+    pages.push(`<section class="page">${wm}${head}${table}${last ? tail : ''}${foot(idx + 1, idx > 0)}</section>`);
   });
 
   // --- výpis prací ---
@@ -211,7 +218,7 @@ export function invoiceHtml(inv: Invoice, opts: InvoiceHtmlOptions): string {
         ? `<div class="recap"><div><div class="lbl">Souhrn podle druhu práce</div>${recapTable(summary.byWork)}</div><div><div class="lbl">Souhrn podle pracovníků</div>${recapTable(summary.byWorker)}</div></div>`
         : '';
       pages.push(
-        `<section class="page"><div class="p2h"><div><h2>Výpis prací${idx > 0 ? ' (pokračování)' : ''}</h2><p>${sub}</p></div>${MARK}</div><div class="bar bar2"></div>${table}${recap}${foot(logFirstPage + idx, true)}</section>`
+        `<section class="page">${wm}<div class="p2h"><div><h2>Výpis prací${idx > 0 ? ' (pokračování)' : ''}</h2><p>${sub}</p></div>${MARK}</div><div class="bar bar2"></div>${table}${last ? carryNote : ''}${recap}${foot(logFirstPage + idx, true)}</section>`
       );
     });
   }
@@ -226,7 +233,10 @@ ${opts.fontsCss ?? ''}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
 body{background:${preview ? '#0B0B0A' : '#fff'};font-family:'Barlow',-apple-system,Helvetica,sans-serif;color:var(--ink);-webkit-text-size-adjust:100%}
-.page{width:${PAGE_W}px;height:${PAGE_H}px;overflow:hidden;background:#fff;padding:56px 56px 40px;display:flex;flex-direction:column;${preview ? 'margin:8px auto;' : 'zoom:0.7493;break-after:page;page-break-after:always;'}}
+.page{width:${PAGE_W}px;height:${PAGE_H}px;overflow:hidden;position:relative;background:#fff;padding:56px 56px 40px;display:flex;flex-direction:column;${preview ? 'margin:8px auto;' : 'zoom:0.7493;break-after:page;page-break-after:always;'}}
+.wm{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;z-index:5;overflow:hidden}
+.wm span{transform:rotate(-35deg);font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:190px;letter-spacing:.06em;color:rgba(120,116,104,.16);white-space:nowrap}
+.cnote{font-size:13px;color:var(--muted);margin-top:10px}
 .page:last-child{break-after:auto;page-break-after:auto}
 .top{display:flex;justify-content:space-between;align-items:flex-start;gap:24px}
 .ttl{text-align:right}

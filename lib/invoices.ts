@@ -1,26 +1,61 @@
-// Faktury (migrace v9) - koncepty, vystavení, platba, zrušení.
+// Faktury (migrace v9, v10) - koncepty, vystavení, platba, zrušení.
 //
+// - Koncept jde kdykoli upravit a sdílet (PDF s nápisem KONCEPT) - nic
+//   nemění, číslo nerezervuje. Teprve VYSTAVENÍ fakturu zamkne, přidělí
+//   číslo z řady (není-li zadané ručně) a u faktury ze zakázky odečte
+//   práci z "Nevyfakturováno".
 // - Faktura ze zakázky: položky se předvyplní z NEVYFAKTUROVANÉ práce
-//   zakázky (pak jsou samostatné - úprava položek nemění docházku), výpis
-//   prací ukazuje vždy skutečné zápisy.
+//   zakázky a ze zbytků dřívějších faktur (pak jsou samostatné - úprava
+//   položek nemění docházku), výpis prací ukazuje vždy skutečné zápisy.
 // - Vystavení faktury ze zakázky = podklad k faktuře (invoice_batches) na
 //   částku faktury: zápisy a přejezdy ve výpisu se označí jako
-//   vyfakturované, takže zmizí z "Nevyfakturováno" (u pevné ceny se
-//   odečte částka faktury) a nic se nevyúčtuje dvakrát.
+//   vyfakturované. Fakturuje-li se méně hodin, než je odpracováno, zbytek
+//   se buď nechá k fakturaci později (zůstane v Nevyfakturováno, příští
+//   faktura ho předvyplní), nebo odepíše (sleva); volba se uloží k faktuře.
+// - Zrušená faktura zůstává v seznamu (stav "Zrušená", PDF s nápisem
+//   ZRUŠENO) a její číslo se nikdy znovu nepoužije.
 // - Faktura nese snímek dodavatele, odběratele, položek a výpisu prací -
 //   PDF jde kdykoli vygenerovat znovu stejné (viz lib/invoiceReport.ts).
 
 import { ibanFromSetting } from './bankAccount';
 import { getDb, getSettings } from './db';
 import { toIsoDate } from './format';
-import { addDaysIso, buildWorkLog, invoiceTotal, itemsFromWork, nextInvoiceNumber, periodLabel, round2, summarizeWorkLog, type WorkSource } from './invoiceCalc';
-import { effectiveOrders, getOrder, getOrderDetail, kmRates, listClients, listPeople } from './orders';
+import {
+  addDaysIso,
+  buildWorkLog,
+  carryItem,
+  invoiceTotal,
+  isValidInvoiceNumber,
+  itemsFromWork,
+  nextInvoiceNumber,
+  periodLabel,
+  remainderFor,
+  round2,
+  summarizeWorkLog,
+  type WorkSource,
+} from './invoiceCalc';
+import { deleteInvoiceBatch, effectiveOrders, getOrder, getOrderDetail, kmRates, listClients, listPeople, pendingCarries } from './orders';
 import { tripKm } from './tripPlan';
-import type { AppSettings, Client, Invoice, InvoiceItem, InvoiceParty, InvoicePayment, InvoiceStatus, InvoiceSupplier, Order, WorkLogRow } from './types';
+import type {
+  AppSettings,
+  Client,
+  Invoice,
+  InvoiceCarry,
+  InvoiceItem,
+  InvoiceParty,
+  InvoicePayment,
+  InvoiceRemainder,
+  InvoiceStatus,
+  InvoiceSupplier,
+  Order,
+  RemainderMode,
+  WorkLogRow,
+} from './types';
 
 interface InvoiceRow {
   id: number;
   number: string;
+  number_manual: number;
   order_id: number | null;
   order_name: string | null;
   client_id: number | null;
@@ -37,6 +72,12 @@ interface InvoiceRow {
   invoice_batch_id: number | null;
   issued_at: string | null;
   paid_at: string | null;
+  cancelled_at: string | null;
+  remainder_mode: RemainderMode | null;
+  remainder_hours: number | null;
+  remainder_rate_kc: number | null;
+  remainder_work: string | null;
+  carry_json: string | null;
 }
 
 function parseJson<T>(text: string | null, fallback: T): T {
@@ -75,14 +116,20 @@ async function itemsOf(invoiceId: number): Promise<InvoiceItem[]> {
   );
 }
 
-const SELECT = `SELECT id, number, order_id, order_name, client_id, client_json, supplier_json, status, issue_date, due_days, due_date, payment,
-  with_work_log, work_log_json, total_kc, invoice_batch_id, issued_at, paid_at FROM invoices`;
+const SELECT = `SELECT id, number, number_manual, order_id, order_name, client_id, client_json, supplier_json, status, issue_date, due_days, due_date,
+  payment, with_work_log, work_log_json, total_kc, invoice_batch_id, issued_at, paid_at, cancelled_at, remainder_mode, remainder_hours,
+  remainder_rate_kc, remainder_work, carry_json FROM invoices`;
 
 function mapRow(r: InvoiceRow, items: InvoiceItem[]): Invoice {
   const client = parseJson<InvoiceParty | null>(r.client_json, null);
+  const remainder: InvoiceRemainder | null =
+    r.remainder_mode && r.remainder_hours !== null
+      ? { mode: r.remainder_mode, hours: r.remainder_hours, rateKc: r.remainder_rate_kc ?? 0, work: r.remainder_work ?? 'Práce' }
+      : null;
   return {
     id: r.id,
     number: r.number,
+    numberManual: r.number_manual === 1,
     orderId: r.order_id,
     orderName: r.order_name,
     clientId: r.client_id,
@@ -100,6 +147,9 @@ function mapRow(r: InvoiceRow, items: InvoiceItem[]): Invoice {
     invoiceBatchId: r.invoice_batch_id,
     issuedAt: r.issued_at,
     paidAt: r.paid_at,
+    cancelledAt: r.cancelled_at,
+    remainder,
+    carries: parseJson<InvoiceCarry[]>(r.carry_json, []),
   };
 }
 
@@ -109,7 +159,7 @@ export async function getInvoice(id: number): Promise<Invoice | null> {
   return row ? mapRow(row, await itemsOf(id)) : null;
 }
 
-// Seznam bez položek (stačí částka a stav).
+// Seznam bez položek (stačí částka a stav); zrušené zůstávají.
 export async function listInvoices(): Promise<Invoice[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<InvoiceRow>(`${SELECT} WHERE is_deleted = 0 ORDER BY issue_date DESC, number DESC`);
@@ -123,16 +173,22 @@ export async function findDraftForOrder(orderId: number): Promise<number | null>
 }
 
 // --- číslo faktury ---
+//
+// Řadu tvoří všechny kdy vystavené faktury - i zrušené (a i ty, které
+// starší verze smazala), takže se číslo nikdy nepoužije znovu. Koncepty
+// čísla nerezervují.
+
+const SERIES = "SELECT number FROM invoices WHERE status != 'draft' OR issued_at IS NOT NULL";
 
 export async function suggestInvoiceNumber(issueDate: string): Promise<string> {
   const db = await getDb();
-  const rows = await db.getAllAsync<{ number: string }>('SELECT number FROM invoices WHERE is_deleted = 0');
+  const rows = await db.getAllAsync<{ number: string }>(SERIES);
   return nextInvoiceNumber(rows.map((r) => r.number), Number(issueDate.slice(0, 4)));
 }
 
-export async function invoiceNumberTaken(number: string, exceptId: number | null): Promise<boolean> {
+export async function invoiceNumberTaken(number: string, exceptId: number | null = null): Promise<boolean> {
   const db = await getDb();
-  const row = await db.getFirstAsync<{ c: number }>('SELECT COUNT(*) as c FROM invoices WHERE number = ? AND is_deleted = 0 AND id IS NOT ?', [number, exceptId]);
+  const row = await db.getFirstAsync<{ c: number }>(`SELECT COUNT(*) as c FROM (${SERIES.replace('SELECT number', 'SELECT number, id')}) WHERE number = ? AND id IS NOT ?`, [number, exceptId]);
   return (row?.c ?? 0) > 0;
 }
 
@@ -202,12 +258,14 @@ export async function newInvoice(orderId: number | null): Promise<Invoice> {
   const issueDate = toIsoDate(new Date());
   const dueDays = settings.defaultDueDays;
   const work = orderId !== null ? await orderWorkForInvoice(orderId) : null;
+  const carries = work ? await pendingCarries(work.order.id) : [];
   let client: Client | null = null;
   if (work?.order.clientId) client = (await listClients()).find((c) => c.id === work.order.clientId) ?? null;
-  const items = work?.prefill ?? [];
+  const items = [...(work?.prefill ?? []), ...carries.map(carryItem)];
   return {
     id: null,
     number: await suggestInvoiceNumber(issueDate),
+    numberManual: false,
     orderId: work ? work.order.id : null,
     orderName: work ? work.order.name : null,
     clientId: client?.id ?? null,
@@ -225,42 +283,57 @@ export async function newInvoice(orderId: number | null): Promise<Invoice> {
     invoiceBatchId: null,
     issuedAt: null,
     paidAt: null,
+    cancelledAt: null,
+    remainder: null,
+    carries,
   };
 }
 
-// Koncept ze zakázky: dodavatel a výpis prací vždy aktuální (zápisy se
-// mezitím mohly změnit); položky zůstávají, jak je uživatel upravil.
+// Koncept: dodavatel, výpis prací, zbytky dřívějších faktur a navržené
+// číslo vždy aktuální (zápisy i řada se mezitím mohly změnit); položky
+// zůstávají, jak je uživatel upravil.
 export async function refreshDraft(inv: Invoice): Promise<Invoice> {
   if (inv.status !== 'draft') return inv;
   const supplier = supplierFromSettings(await getSettings());
-  if (inv.orderId === null) return { ...inv, supplier };
+  const number = inv.numberManual ? inv.number : await suggestInvoiceNumber(inv.issueDate);
+  if (inv.orderId === null) return { ...inv, supplier, number };
   const work = await orderWorkForInvoice(inv.orderId);
-  return { ...inv, supplier, workLog: work ? work.workLog : inv.workLog, orderName: work?.order.name ?? inv.orderName };
+  return {
+    ...inv,
+    supplier,
+    number,
+    workLog: work ? work.workLog : inv.workLog,
+    orderName: work?.order.name ?? inv.orderName,
+    carries: await pendingCarries(inv.orderId),
+  };
 }
 
-// --- uložení ---
+// --- uložení konceptu ---
 
 export async function saveInvoice(inv: Invoice): Promise<number> {
+  if (inv.status !== 'draft') throw new Error('Vystavená faktura se už nemění.');
   const db = await getDb();
   const items = inv.items.filter((i) => i.name.trim() || i.quantity !== 0 || i.unitPriceKc !== 0);
   const total = invoiceTotal(items);
   const params = [
-    inv.number, inv.orderId, inv.orderName, inv.clientId, JSON.stringify(inv.client), JSON.stringify(inv.supplier), inv.status, inv.issueDate,
+    inv.number, inv.numberManual ? 1 : 0, inv.orderId, inv.orderName, inv.clientId, JSON.stringify(inv.client), JSON.stringify(inv.supplier), inv.issueDate,
     inv.dueDays, addDaysIso(inv.issueDate, inv.dueDays), inv.payment, inv.withWorkLog ? 1 : 0, inv.workLog ? JSON.stringify(inv.workLog) : null, total,
+    JSON.stringify(inv.carries),
   ];
   let id = inv.id;
   await db.withExclusiveTransactionAsync(async (txn) => {
     if (id) {
       await txn.runAsync(
-        `UPDATE invoices SET number = ?, order_id = ?, order_name = ?, client_id = ?, client_json = ?, supplier_json = ?, status = ?, issue_date = ?,
-           due_days = ?, due_date = ?, payment = ?, with_work_log = ?, work_log_json = ?, total_kc = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE invoices SET number = ?, number_manual = ?, order_id = ?, order_name = ?, client_id = ?, client_json = ?, supplier_json = ?, issue_date = ?,
+           due_days = ?, due_date = ?, payment = ?, with_work_log = ?, work_log_json = ?, total_kc = ?, carry_json = ?, updated_at = ?
+         WHERE id = ? AND status = 'draft'`,
         [...params, new Date().toISOString(), id]
       );
       await txn.runAsync('DELETE FROM invoice_items WHERE invoice_id = ?', [id]);
     } else {
       const r = await txn.runAsync(
-        `INSERT INTO invoices (number, order_id, order_name, client_id, client_json, supplier_json, status, issue_date, due_days, due_date, payment,
-           with_work_log, work_log_json, total_kc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO invoices (number, number_manual, order_id, order_name, client_id, client_json, supplier_json, issue_date, due_days, due_date, payment,
+           with_work_log, work_log_json, total_kc, carry_json, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
         params
       );
       id = r.lastInsertRowId;
@@ -275,15 +348,30 @@ export async function saveInvoice(inv: Invoice): Promise<number> {
   return id as number;
 }
 
-// Vystavení: uloží snímek a u faktury ze zakázky vytvoří podklad k faktuře
-// na částku faktury - označí právě ty zápisy a přejezdy, které jsou ve
-// výpisu prací (výpis se v tu chvíli zafixuje).
-export async function issueInvoice(inv: Invoice): Promise<Invoice> {
+// --- vystavení ---
+
+// Před vystavením (pro potvrzení v UI): výsledné číslo, aktuální výpis
+// prací a zbytky, a kolik hodin by zbylo (null = nic).
+export async function prepareIssue(inv: Invoice): Promise<{ invoice: Invoice; remainder: Omit<InvoiceRemainder, 'mode'> | null }> {
+  const fresh = await refreshDraft(inv);
+  const number = fresh.numberManual ? fresh.number : await suggestInvoiceNumber(fresh.issueDate);
+  const invoice = { ...fresh, number };
+  return { invoice, remainder: invoice.orderId !== null ? remainderFor(invoice.items, invoice.workLog, invoice.carries) : null };
+}
+
+// Vystavení: zamkne snímek, přidělí číslo z řady (ruční číslo jen když je
+// volné) a u faktury ze zakázky vytvoří podklad na částku faktury - označí
+// právě ty zápisy a přejezdy, které jsou ve výpisu prací, a převezme
+// zbytky dřívějších faktur. `remainderMode` = co se zbytkem hodin (jen
+// když se fakturuje méně hodin, než je odpracováno).
+export async function issueInvoice(inv: Invoice, remainderMode: RemainderMode | null = null): Promise<Invoice> {
   if (inv.status !== 'draft') return inv;
-  const supplier = supplierFromSettings(await getSettings());
-  const work = inv.orderId !== null ? await orderWorkForInvoice(inv.orderId) : null;
-  const ready: Invoice = { ...inv, supplier, workLog: work ? work.workLog : inv.workLog };
-  const id = await saveInvoice(ready);
+  const { invoice: ready, remainder } = await prepareIssue(inv);
+  if (!isValidInvoiceNumber(ready.number)) throw new Error('Číslo faktury smí mít jen číslice, nejvýš 10.');
+  if (await invoiceNumberTaken(ready.number, ready.id)) throw new Error(`Faktura č. ${ready.number} už byla vystavená (čísla se znovu nepoužívají).`);
+  if (remainder && !remainderMode) throw new Error('Chybí volba, co se zbytkem hodin.');
+  const work = ready.orderId !== null ? await orderWorkForInvoice(ready.orderId) : null;
+  const id = await saveInvoice({ ...ready, workLog: work ? work.workLog : ready.workLog });
   const total = invoiceTotal(ready.items);
   const now = new Date().toISOString();
   const db = await getDb();
@@ -295,15 +383,20 @@ export async function issueInvoice(inv: Invoice): Promise<Invoice> {
       for (const rid of work.recordIds) await txn.runAsync('UPDATE day_work_records SET invoice_batch_id = ?, order_id = ? WHERE id = ? AND invoice_batch_id IS NULL', [batchId, work.order.id, rid]);
       for (const tid of work.tripIds) await txn.runAsync('UPDATE trips SET invoice_batch_id = ?, order_id = ? WHERE id = ? AND invoice_batch_id IS NULL', [batchId, work.order.id, tid]);
       await txn.runAsync('UPDATE order_expenses SET invoice_batch_id = ? WHERE order_id = ? AND invoice_batch_id IS NULL AND is_deleted = 0', [batchId, work.order.id]);
+      for (const c of ready.carries) await txn.runAsync('UPDATE invoices SET remainder_consumed_by = ? WHERE id = ? AND remainder_consumed_by IS NULL', [id, c.invoiceId]);
       if (work.order.status === 'done') await txn.runAsync("UPDATE orders SET status = 'invoiced' WHERE id = ?", [work.order.id]);
     }
-    await txn.runAsync("UPDATE invoices SET status = 'issued', issued_at = ?, invoice_batch_id = ? WHERE id = ?", [now, batchId, id]);
+    await txn.runAsync(
+      `UPDATE invoices SET status = 'issued', number_manual = 1, issued_at = ?, invoice_batch_id = ?, remainder_mode = ?, remainder_hours = ?, remainder_rate_kc = ?,
+         remainder_work = ? WHERE id = ?`,
+      [now, batchId, remainder ? remainderMode : null, remainder?.hours ?? null, remainder?.rateKc ?? null, remainder?.work ?? null, id]
+    );
   });
   return (await getInvoice(id)) as Invoice;
 }
 
 export async function setInvoicePaid(inv: Invoice, paid: boolean): Promise<void> {
-  if (inv.id === null || inv.status === 'draft') return;
+  if (inv.id === null || (inv.status !== 'issued' && inv.status !== 'paid')) return;
   const db = await getDb();
   const at = paid ? new Date().toISOString() : null;
   await db.runAsync('UPDATE invoices SET status = ?, paid_at = ? WHERE id = ?', [paid ? 'paid' : 'issued', at, inv.id]);
@@ -314,18 +407,29 @@ export async function setInvoicePaid(inv: Invoice, paid: boolean): Promise<void>
   }
 }
 
-// Smazání konceptu / zrušení vystavené faktury - u faktury ze zakázky se
-// zruší i podklad, práce je zase nevyfakturovaná.
-export async function deleteInvoice(inv: Invoice): Promise<void> {
-  if (inv.id === null) return;
+// Smazání konceptu (koncept číslo nemá, nic se neztratí).
+export async function deleteDraft(inv: Invoice): Promise<void> {
+  if (inv.id === null || inv.status !== 'draft') return;
   const db = await getDb();
-  await db.withExclusiveTransactionAsync(async (txn) => {
-    await txn.runAsync('UPDATE invoices SET is_deleted = 1, updated_at = ? WHERE id = ?', [new Date().toISOString(), inv.id]);
-    if (inv.invoiceBatchId !== null) {
-      await txn.runAsync('UPDATE invoice_batches SET is_deleted = 1 WHERE id = ?', [inv.invoiceBatchId]);
-      for (const table of ['day_work_records', 'trips', 'order_expenses']) {
-        await txn.runAsync(`UPDATE ${table} SET invoice_batch_id = NULL WHERE invoice_batch_id = ?`, [inv.invoiceBatchId]);
-      }
+  await db.runAsync("UPDATE invoices SET is_deleted = 1, updated_at = ? WHERE id = ? AND status = 'draft'", [new Date().toISOString(), inv.id]);
+}
+
+// Zrušení vystavené faktury: zůstane v seznamu jako "Zrušená" (číslo se
+// znovu nepoužije); u faktury ze zakázky se zruší podklad - práce je zase
+// nevyfakturovaná a převzaté zbytky dřívějších faktur jsou zase k fakturaci.
+export async function cancelInvoice(inv: Invoice): Promise<void> {
+  if (inv.id === null || (inv.status !== 'issued' && inv.status !== 'paid')) return;
+  if (inv.invoiceBatchId !== null) {
+    const db = await getDb();
+    const batch = await db.getFirstAsync<{ order_id: number }>('SELECT order_id FROM invoice_batches WHERE id = ?', [inv.invoiceBatchId]);
+    if (batch) {
+      // podklad zruší i fakturu (lib/orders.ts -> deleteInvoiceBatch)
+      await deleteInvoiceBatch({ id: inv.invoiceBatchId, orderId: batch.order_id, createdAt: '', totalKc: 0, note: '', status: 'invoiced', paidAt: null });
+      return;
     }
-  });
+  }
+  const db = await getDb();
+  const now = new Date().toISOString();
+  await db.runAsync('UPDATE invoices SET remainder_consumed_by = NULL WHERE remainder_consumed_by = ?', [inv.id]);
+  await db.runAsync("UPDATE invoices SET status = 'cancelled', cancelled_at = ?, updated_at = ? WHERE id = ?", [now, now, inv.id]);
 }

@@ -7,7 +7,7 @@
 // číslo jde do PDF i do QR Platby.
 
 import { formatQuantity } from './format';
-import type { InvoiceItem, RateUnit, WorkLogRow } from './types';
+import type { InvoiceCarry, InvoiceItem, InvoiceRemainder, RateUnit, WorkLogRow } from './types';
 
 export const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -189,10 +189,32 @@ export function itemsFromWork(rows: WorkSource[], description: string, fixed: { 
     .map((i) => ({ name: i.name, description: i.description, quantity: round2(i.quantity), unit: i.unit, unitPriceKc: i.unitPriceKc }));
 }
 
-// Žluté upozornění: hodiny v položkách (jednotka h) ≠ odpracované hodiny.
-export function hoursMismatch(items: InvoiceItem[], workLog: WorkLogRow[] | null): { itemHours: number; workHours: number } | null {
-  if (!workLog) return null;
+// Žluté upozornění: hodiny v položkách (jednotka h) ≠ odpracované hodiny
+// (výpis prací + převzaté zbytky dřívějších faktur). Bez hodinových položek
+// (pevná cena, paušál) se nehlídá.
+export function hoursMismatch(items: InvoiceItem[], workLog: WorkLogRow[] | null, carries: InvoiceCarry[] = []): { itemHours: number; workHours: number } | null {
+  if (!workLog || !items.some((i) => i.unit === 'h')) return null;
   const itemHours = round2(items.filter((i) => i.unit === 'h').reduce((s, i) => s + i.quantity, 0));
-  const workHours = round2(workLog.filter((r) => r.unit === 'hour').reduce((s, r) => s + r.quantity, 0));
+  const workHours = round2(workLog.filter((r) => r.unit === 'hour').reduce((s, r) => s + r.quantity, 0) + carries.reduce((s, c) => s + c.hours, 0));
   return Math.abs(itemHours - workHours) > 0.001 ? { itemHours, workHours } : null;
+}
+
+// --- zbytek hodin při nižší fakturaci ---
+
+export const carryKc = (c: Pick<InvoiceCarry, 'hours' | 'rateKc'>) => round2(c.hours * c.rateKc);
+
+// Fakturuje se méně hodin, než je odpracováno -> zbytek (hodiny, průměrná
+// hodinová sazba, druh práce). null = nic nezbývá.
+export function remainderFor(items: InvoiceItem[], workLog: WorkLogRow[] | null, carries: InvoiceCarry[] = []): Omit<InvoiceRemainder, 'mode'> | null {
+  const m = hoursMismatch(items, workLog, carries);
+  if (!m || m.itemHours >= m.workHours) return null;
+  const hourRows = (workLog ?? []).filter((r) => r.unit === 'hour');
+  const amount = hourRows.reduce((s, r) => s + r.amountKc, 0) + carries.reduce((s, c) => s + carryKc(c), 0);
+  const works = new Set([...hourRows.map((r) => r.work), ...carries.map((c) => c.work)]);
+  return { hours: round2(m.workHours - m.itemHours), rateKc: round2(amount / m.workHours), work: works.size === 1 ? [...works][0] : 'Práce' };
+}
+
+// Položka faktury za zbytek převzatý z dřívější faktury.
+export function carryItem(c: InvoiceCarry): InvoiceItem {
+  return { name: c.work, description: `Nevyfakturováno z faktury č. ${c.number}`, quantity: c.hours, unit: 'h', unitPriceKc: c.rateKc };
 }

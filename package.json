@@ -56,7 +56,8 @@
     "lint": "expo lint",
     "test:engine": "tsc --ignoreConfig --ignoreDeprecations 6.0 --outDir node_modules/.cache/dochazka-tests --rootDir . --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --strict --types node scripts/test-visit-engine.ts && TZ=UTC node node_modules/.cache/dochazka-tests/scripts/test-visit-engine.js",
     "test:replay": "tsc --ignoreConfig --ignoreDeprecations 6.0 --outDir node_modules/.cache/dochazka-tests --rootDir . --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --strict --types node private/replay-test.ts && TZ=Europe/Prague node node_modules/.cache/dochazka-tests/private/replay-test.js",
-    "test:invoice": "tsc --ignoreConfig --ignoreDeprecations 6.0 --outDir node_modules/.cache/dochazka-tests --rootDir . --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --strict --types node scripts/test-invoice.ts && TZ=Europe/Prague node node_modules/.cache/dochazka-tests/scripts/test-invoice.js"
+    "test:invoice": "tsc --ignoreConfig --ignoreDeprecations 6.0 --outDir node_modules/.cache/dochazka-tests --rootDir . --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --strict --types node scripts/test-invoice.ts && TZ=Europe/Prague node node_modules/.cache/dochazka-tests/scripts/test-invoice.js",
+    "test:invoice-db": "tsc -p scripts/tsconfig.invoice-db.json && TZ=Europe/Prague TEST_DB_DIR=node_modules/.cache/dochazka-invoice-db/db node scripts/run-invoice-db-test.js"
   },
   "private": true
 }

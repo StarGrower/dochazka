@@ -211,7 +211,27 @@ export interface InvoiceBatch {
 
 // --- fakturace (migrace v9) ---
 
-export type InvoiceStatus = 'draft' | 'issued' | 'paid';
+export type InvoiceStatus = 'draft' | 'issued' | 'paid' | 'cancelled';
+
+// Co se zbytkem hodin, když faktura ze zakázky fakturuje méně hodin, než
+// je odpracováno: nechat k fakturaci později / odepsat (sleva).
+export type RemainderMode = 'carry' | 'writeoff';
+
+export interface InvoiceRemainder {
+  mode: RemainderMode;
+  hours: number;
+  rateKc: number; // průměrná hodinová sazba odpracovaných hodin
+  work: string; // druh práce (víc druhů = "Práce")
+}
+
+// Zbytek z dřívější faktury převzatý touto fakturou.
+export interface InvoiceCarry {
+  invoiceId: number;
+  number: string;
+  hours: number;
+  rateKc: number;
+  work: string;
+}
 export type InvoicePayment = 'transfer' | 'cash';
 
 export const INVOICE_UNITS = ['h', 'ks', 'km', 'den', 'Mth', 'm³', 't', 'jízda', 'paušál'] as const;
@@ -254,6 +274,7 @@ export interface WorkLogRow {
 export interface Invoice {
   id: number | null; // null = ještě neuložená
   number: string; // číslo faktury = variabilní symbol
+  numberManual: boolean; // false = koncept dostane při vystavení další volné číslo z řady
   orderId: number | null;
   orderName: string | null;
   clientId: number | null;
@@ -271,6 +292,9 @@ export interface Invoice {
   invoiceBatchId: number | null;
   issuedAt: string | null;
   paidAt: string | null;
+  cancelledAt: string | null;
+  remainder: InvoiceRemainder | null; // volba při vystavení (null = hodiny seděly)
+  carries: InvoiceCarry[]; // převzaté zbytky dřívějších faktur
 }
 
 // Pracovník / řidič (etapy 5-7, doplněk "práce mimo moje pobyty").

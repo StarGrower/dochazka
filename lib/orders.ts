@@ -15,7 +15,7 @@ import { getDb, getVisitsForDay, listCategories, listPlaces } from './db';
 import { toIsoDate } from './format';
 import { computeOrderStats, type OrderStats } from './orderStats';
 import { tripKm } from './tripPlan';
-import { ME_ID, type Client, type ExpenseCategory, type InvoiceBatch, type Order, type OrderExpense, type OrderPriceMode, type OrderStatus, type Person } from './types';
+import { ME_ID, type Client, type InvoiceCarry, type ExpenseCategory, type InvoiceBatch, type Order, type OrderExpense, type OrderPriceMode, type OrderStatus, type Person } from './types';
 
 // --- odběratelé ---
 
@@ -396,22 +396,43 @@ export async function setInvoiceBatchPaid(batch: InvoiceBatch, paid: boolean): P
   const db = await getDb();
   await db.runAsync('UPDATE invoice_batches SET status = ?, paid_at = ? WHERE id = ?', [paid ? 'paid' : 'invoiced', paid ? new Date().toISOString() : null, batch.id]);
   // Faktura vystavená z tohoto podkladu má stejný stav platby.
-  await db.runAsync("UPDATE invoices SET status = ?, paid_at = ? WHERE invoice_batch_id = ? AND status != 'draft'", [paid ? 'paid' : 'issued', paid ? new Date().toISOString() : null, batch.id]);
+  await db.runAsync("UPDATE invoices SET status = ?, paid_at = ? WHERE invoice_batch_id = ? AND status IN ('issued', 'paid')", [paid ? 'paid' : 'issued', paid ? new Date().toISOString() : null, batch.id]);
   const open = await db.getFirstAsync<{ c: number }>("SELECT COUNT(*) as c FROM invoice_batches WHERE order_id = ? AND status = 'invoiced' AND is_deleted = 0", [batch.orderId]);
   if (paid && open?.c === 0) await db.runAsync("UPDATE orders SET status = 'paid' WHERE id = ? AND status = 'invoiced'", [batch.orderId]);
 }
 
 // Zrušení podkladu - položky jsou zase "nevyfakturované". Faktura
-// vystavená z podkladu se vrátí na koncept (jde opravit a vystavit znovu).
+// vystavená z podkladu je tím zrušená (číslo se znovu nepoužije) a zbytky
+// dřívějších faktur, které převzala, jsou zase k fakturaci.
 export async function deleteInvoiceBatch(batch: InvoiceBatch): Promise<void> {
   const db = await getDb();
   await db.withExclusiveTransactionAsync(async (txn) => {
     await txn.runAsync('UPDATE invoice_batches SET is_deleted = 1 WHERE id = ?', [batch.id]);
-    await txn.runAsync("UPDATE invoices SET status = 'draft', invoice_batch_id = NULL, issued_at = NULL, paid_at = NULL WHERE invoice_batch_id = ?", [batch.id]);
+    const now = new Date().toISOString();
+    await txn.runAsync(
+      `UPDATE invoices SET remainder_consumed_by = NULL
+       WHERE remainder_consumed_by IN (SELECT id FROM invoices WHERE invoice_batch_id = ? AND status != 'draft')`,
+      [batch.id]
+    );
+    await txn.runAsync("UPDATE invoices SET status = 'cancelled', cancelled_at = ?, updated_at = ? WHERE invoice_batch_id = ? AND status != 'draft'", [now, now, batch.id]);
     for (const table of ['day_work_records', 'trips', 'order_expenses']) {
       await txn.runAsync(`UPDATE ${table} SET invoice_batch_id = NULL WHERE invoice_batch_id = ?`, [batch.id]);
     }
   });
+}
+
+// Zbytky hodin "nechat k fakturaci později" z vystavených faktur zakázky,
+// které ještě žádná další vystavená faktura nepřevzala. Patří do
+// Nevyfakturováno a předvyplní se do příští faktury ze zakázky.
+export async function pendingCarries(orderId: number): Promise<InvoiceCarry[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ id: number; number: string; remainder_hours: number; remainder_rate_kc: number; remainder_work: string | null }>(
+    `SELECT id, number, remainder_hours, remainder_rate_kc, remainder_work FROM invoices
+     WHERE order_id = ? AND status IN ('issued', 'paid') AND remainder_mode = 'carry' AND remainder_consumed_by IS NULL AND is_deleted = 0
+     ORDER BY issued_at, id`,
+    [orderId]
+  );
+  return rows.map((r) => ({ invoiceId: r.id, number: r.number, hours: r.remainder_hours, rateKc: r.remainder_rate_kc, work: r.remainder_work ?? 'Práce' }));
 }
 
 // --- přehled zakázky ---
@@ -513,6 +534,10 @@ export async function getOrderDetail(orderId: number, workerId: number | null = 
     invoicedKc: batches.reduce((s, b) => s + b.totalKc, 0),
     people: new Map(people.map((p) => [p.id, p.name])),
   });
+  // Zbytky z dřívějších faktur ("nechat k fakturaci později") - celá zakázka.
+  if (workerId === null) {
+    for (const c of await pendingCarries(orderId)) stats.unbilledKc += Math.round(c.hours * c.rateKc * 100) / 100;
+  }
   const dates = [...records.map((r) => r.date), ...trips.map((t) => toIsoDate(new Date(t.start_at)))].sort();
   return { order, stats, expenses, batches, firstDate: dates[0] ?? null, lastDate: dates[dates.length - 1] ?? null };
 }

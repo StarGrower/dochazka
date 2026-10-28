@@ -9,6 +9,8 @@ import { czIban, formatCzAccount, formatIban, ibanFromSetting, ibanValid, mod11O
 import {
   addDaysIso,
   buildWorkLog,
+  carryItem,
+  carryKc,
   czDateWithWeekday,
   hoursMismatch,
   invoiceTotal,
@@ -18,6 +20,7 @@ import {
   parseCzDate,
   parseDecimal,
   periodLabel,
+  remainderFor,
   summarizeWorkLog,
   type WorkSource,
 } from '../lib/invoiceCalc';
@@ -40,6 +43,7 @@ function sampleInvoice(over: Partial<Invoice> = {}): Invoice {
   return {
     id: 1,
     number: '2026001',
+    numberManual: true,
     orderId: 7,
     orderName: 'Veselá',
     clientId: 3,
@@ -48,7 +52,7 @@ function sampleInvoice(over: Partial<Invoice> = {}): Invoice {
       name: 'Filip Kalenský', address: 'Heřmaneč 21\n378 53 Strmilov', ico: '09041362', dic: '', phone: '', email: '',
       registryText: 'Fyzická osoba zapsaná v živnostenském rejstříku.', vatPayer: false, bankAccount: '19-2000145399/0800', iban: 'CZ6508000000192000145399',
     },
-    status: 'draft',
+    status: 'issued',
     issueDate: '2026-10-28',
     dueDays: 14,
     dueDate: '2026-11-11',
@@ -58,8 +62,11 @@ function sampleInvoice(over: Partial<Invoice> = {}): Invoice {
     items,
     totalKc: invoiceTotal(items),
     invoiceBatchId: null,
-    issuedAt: null,
+    issuedAt: '2026-10-28T10:00:00.000Z',
     paidAt: null,
+    cancelledAt: null,
+    remainder: null,
+    carries: [],
     ...over,
   };
 }
@@ -276,6 +283,30 @@ const tests: Array<[string, () => void]> = [
     const spayd = buildSpayd({ iban: 'CZ6508000000192000145399', amountKc: total, vs: inv.number, dueDate: inv.dueDate, message: `Faktura ${inv.number}` });
     assert.match(spayd, /\*AM:10730\.90\*/);
     assert.equal(hoursMismatch(items, null), null);
+  }],
+  ['vodoznak: koncept KONCEPT, zrušená ZRUŠENO, vystavená bez nápisu, na každé straně', () => {
+    assert.doesNotMatch(invoiceHtml(sampleInvoice(), { mode: 'print' }), /class="wm"/);
+    const draft = invoiceHtml(sampleInvoice({ status: 'draft' }), { mode: 'print' });
+    assert.equal((draft.match(/<span>KONCEPT<\/span>/g) ?? []).length, 2);
+    const cancelled = invoiceHtml(sampleInvoice({ status: 'cancelled', cancelledAt: '2026-10-30T10:00:00.000Z' }), { mode: 'preview' });
+    assert.equal((cancelled.match(/<span>ZRUŠENO<\/span>/g) ?? []).length, 2);
+    assert.doesNotMatch(invoiceHtml(sampleInvoice({ status: 'paid' }), { mode: 'print' }), /class="wm"/);
+  }],
+  ['zbytek hodin: jen když se fakturuje méně, průměrná sazba, převzetí do další faktury', () => {
+    const inv = sampleInvoice();
+    assert.equal(remainderFor(inv.items, inv.workLog), null);
+    assert.equal(remainderFor([{ ...inv.items[0], quantity: 22 }], inv.workLog), null);
+    assert.deepEqual(remainderFor([{ ...inv.items[0], quantity: 18 }], inv.workLog), { hours: 2.5, rateKc: 350, work: 'Ruční práce' });
+    const mixed = buildWorkLog([...WORK, { date: '2026-10-27', work: 'Bagr', worker: 'Já', quantity: 4, unit: 'hour', amountKc: 3600 }]);
+    assert.deepEqual(remainderFor([{ ...inv.items[0], quantity: 20.5 }], mixed), { hours: 4, rateKc: 439.8, work: 'Práce' });
+    // paušál (pevná cena) se nehlídá
+    assert.equal(remainderFor([{ name: 'Veselá', description: '', quantity: 1, unit: 'paušál', unitPriceKc: 50000 }], inv.workLog), null);
+    const carry = { invoiceId: 1, number: '2026001', hours: 2.5, rateKc: 350, work: 'Ruční práce' };
+    assert.equal(carryKc(carry), 875);
+    assert.deepEqual(carryItem(carry), { name: 'Ruční práce', description: 'Nevyfakturováno z faktury č. 2026001', quantity: 2.5, unit: 'h', unitPriceKc: 350 });
+    // s převzatým zbytkem se hodiny počítají včetně něj
+    assert.equal(hoursMismatch([...inv.items, carryItem(carry)], inv.workLog, [carry]), null);
+    assert.deepEqual(hoursMismatch(inv.items, inv.workLog, [carry]), { itemHours: 20.5, workHours: 23 });
   }],
   ['stránkování: součty na poslední straně, jinak strana navíc', () => {
     assert.deepEqual(paginate([1, 1, 1], () => 10, 25, 25, 0).map((p) => p.length), [2, 1]);
