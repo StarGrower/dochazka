@@ -10,12 +10,12 @@
 
 import { useCallback, useState } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { SymbolView } from 'expo-symbols';
 import { useFocusEffect } from 'expo-router';
 
 import BottomSheetModal from '@/components/BottomSheetModal';
 import ColorPicker, { isValidHex } from '@/components/ColorPicker';
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import NumPad from '@/components/NumPad';
 import ScreenHeader from '@/components/ScreenHeader';
@@ -180,7 +180,7 @@ export default function CategoriesSettingsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="STROJE A KATEGORIE" />
 
       <FlatList
@@ -303,7 +303,7 @@ export default function CategoriesSettingsScreen() {
 
         </>
       </BottomSheetModal>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

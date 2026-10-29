@@ -4,10 +4,10 @@
 
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 
 import BottomSheetModal from '@/components/BottomSheetModal';
+import SafeScreen from '@/components/SafeScreen';
 import { formatKc, formatNumberCs } from '@/lib/format';
 import { fuelReportHtml, fuelReportXlsx } from '@/lib/fuelReport';
 import {
@@ -115,7 +115,7 @@ export default function StrojeScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container} tab>
       <View style={styles.top}>
         <Text style={styles.h1}>STROJE</Text>
         <TouchableOpacity style={styles.ib} onPress={() => router.push('/machine/edit')} accessibilityLabel="Nový stroj">
@@ -227,7 +227,7 @@ export default function StrojeScreen() {
           {reimburse.length === 0 && <Text style={styles.hintText}>Nic k proplacení.</Text>}
         </View>
       </BottomSheetModal>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

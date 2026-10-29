@@ -2,9 +2,9 @@
 
 import { useCallback, useState } from 'react';
 import { Alert, SectionList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import ScreenHeader from '@/components/ScreenHeader';
 import { deletePlace, listPlaces } from '@/lib/db';
 import { refreshGeofences } from '@/lib/locationTracking';
@@ -44,7 +44,7 @@ export default function PlacesSettingsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="ULOŽENÁ MÍSTA" />
 
       <SectionList
@@ -78,7 +78,7 @@ export default function PlacesSettingsScreen() {
       <TouchableOpacity style={styles.addButton} onPress={() => router.push('/settings/place-edit')}>
         <Text style={styles.addButtonText}>+ PŘIDAT MÍSTO</Text>
       </TouchableOpacity>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

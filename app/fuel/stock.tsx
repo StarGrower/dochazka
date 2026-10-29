@@ -3,9 +3,9 @@
 
 import { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import { formatKc, formatNumberCs, todayIso } from '@/lib/format';
@@ -62,7 +62,7 @@ export default function FuelStockScreen() {
   const t = parseNum(total);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="ZÁSOBA NAFTY" onBack={() => router.back()} />
       <ScrollView contentContainerStyle={styles.sc} keyboardShouldPersistTaps="handled">
         <View style={styles.hero}>
@@ -120,7 +120,7 @@ export default function FuelStockScreen() {
           ))}
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

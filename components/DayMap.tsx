@@ -6,11 +6,11 @@
 // přiblíží daný pobyt/přejezd.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import MapView, { Marker, Polyline, type LatLng } from 'react-native-maps';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { colors, fonts, fs, MIN_TOUCH, radii } from '@/theme';
+import ScreenModal, { ModalBarButton } from './ScreenModal';
+import { colors, fonts, fs, radii } from '@/theme';
 
 export interface DayMapStop {
   key: string; // "visit-<id>"
@@ -102,7 +102,6 @@ function MapContent({ stops, routes, selectedKey, fullscreen }: DayMapProps & { 
 
 export default function DayMap(props: DayMapProps) {
   const [fullscreen, setFullscreen] = useState(false);
-  const insets = useSafeAreaInsets();
   const empty = props.stops.length === 0 && props.routes.length === 0;
 
   if (empty) {
@@ -120,31 +119,15 @@ export default function DayMap(props: DayMapProps) {
         {/* Průhledná vrstva - klepnutí kamkoliv roztáhne mapu (malá mapa se nehýbe). */}
         <Pressable style={StyleSheet.absoluteFill} onPress={() => setFullscreen(true)} />
       </View>
-      {/* OPRAVA (po buildu 37503018105): SafeAreaView uvnitř Modal dostával
-          nulové okraje (Modal = samostatné okno) -> ZAVŘÍT bylo pod horní
-          lištou iPhonu. Teď: iOS list "pageSheet" (zavření tahem dolů za
-          pruh nahoře - mapa sama tah spotřebuje), okraje z hlavního okna a
-          tlačítko 44×44+ s tmavým podkladem. */}
-      <Modal
+      {/* Přes celou obrazovku: components/ScreenModal.tsx (okraje, stažení
+          dolů za úchyt nahoře - mapa sama tah spotřebuje, Zavřít dole). */}
+      <ScreenModal
         visible={fullscreen}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setFullscreen(false)}
+        onClose={() => setFullscreen(false)}
+        footer={<ModalBarButton label="Zavřít mapu" onPress={() => setFullscreen(false)} primary />}
       >
-        <View style={styles.fullscreen}>
-          <View style={styles.grabArea}>
-            <View style={styles.grab} />
-          </View>
-          <View style={styles.flex}>
-            <MapContent {...props} fullscreen />
-            <View style={[styles.closeWrap, { top: 8 + (Platform.OS === 'ios' ? 0 : insets.top) }]} pointerEvents="box-none">
-              <TouchableOpacity style={styles.closeButton} onPress={() => setFullscreen(false)} hitSlop={8} accessibilityLabel="Zavřít mapu">
-                <Text style={styles.closeText}>✕  ZAVŘÍT</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+        <MapContent {...props} fullscreen />
+      </ScreenModal>
     </>
   );
 }
@@ -176,21 +159,4 @@ const styles = StyleSheet.create({
   stopSelected: { borderColor: colors.text, transform: [{ scale: 1.25 }] },
   stopText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(12) },
   stopTextMuted: { color: colors.textMuted },
-  fullscreen: { flex: 1, backgroundColor: colors.background },
-  flex: { flex: 1 },
-  grabArea: { height: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background },
-  grab: { width: 40, height: 5, borderRadius: 3, backgroundColor: colors.border },
-  closeWrap: { position: 'absolute', right: 12, left: 12, alignItems: 'flex-end' },
-  closeButton: {
-    minHeight: MIN_TOUCH,
-    minWidth: MIN_TOUCH,
-    paddingHorizontal: 16,
-    borderRadius: radii.card,
-    backgroundColor: 'rgba(19,19,17,0.85)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  closeText: { color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(14), letterSpacing: 1 },
 });

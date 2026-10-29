@@ -10,12 +10,12 @@
 
 import { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { reloadAppAsync } from 'expo';
 import Constants from 'expo-constants';
 import Storage from 'expo-sqlite/kv-store';
 import { router, useFocusEffect } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import ScreenHeader from '@/components/ScreenHeader';
 import SegmentedControl from '@/components/SegmentedControl';
 import ToggleRow from '@/components/ToggleRow';
@@ -97,7 +97,7 @@ export default function AplikaceSettingsScreen() {
   if (!settings) return null;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="APLIKACE" />
 
       <ScrollView contentContainerStyle={styles.content}>
@@ -148,7 +148,7 @@ export default function AplikaceSettingsScreen() {
           <Text style={styles.value}>{Constants.expoConfig?.version ?? '-'}</Text>
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

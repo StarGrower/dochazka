@@ -1488,3 +1488,19 @@ pak navážu etapou 2 (uložená místa).
     faktuře (`invoices.work_notes_json`), přepínač platí jen pro sdílení
   - výkaz pro šéfa - výchozí VYPNUTO (dřív šla poznámka s „Podrobně“)
 - Detail zakázky › Po dnech: ✎ u dne s poznámkou, celý text v detailu dne.
+
+## Bezpečné okraje (stavový řádek / Dynamic Island, home indikátor)
+
+- Příčina: `SafeAreaView` uvnitř RN `Modal` dostává nulové okraje, takže
+  tlačítka náhledu faktury byla pod Dynamic Islandem. V RN 0.86 navíc
+  stažení `pageSheet` dolů funguje jen s `allowSwipeDismissal`.
+- JEDNO řešení pro celou appku:
+  - `components/SafeScreen.tsx` - kořen každé obrazovky (stack: nahoře
+    i dole; záložky `tab`: jen nahoře). Přímo `SafeAreaView` v `app/` nepoužívat.
+  - `components/ScreenModal.tsx` - celoobrazovkový modal: iOS pageSheet
+    se stažením dolů, okraje z `useSafeAreaInsets`, ovládání ve spodní
+    liště (`ModalBarButton`, min. 44 pt), nahoře jen úchyt a nadpis.
+  - `components/BottomSheetModal.tsx` - okna zespodu (okraje už řešila).
+- Náhled faktury: dole Zavřít | Sdílet koncept | VYSTAVIT (koncept),
+  Zavřít | SDÍLET (vystavená). Akce se spustí až po zavření náhledu.
+- Mapa přes celou obrazovku: ZAVŘÍT MAPU dole, stažení dolů za úchyt.

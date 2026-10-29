@@ -3,9 +3,9 @@
 
 import { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import SegmentedControl from '@/components/SegmentedControl';
@@ -145,7 +145,7 @@ export default function MachineEditScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title={editId === null ? 'NOVÝ STROJ' : 'KARTA STROJE'} subtitle={machine?.name} onBack={() => router.back()} />
       <ScrollView contentContainerStyle={styles.sc} keyboardShouldPersistTaps="handled">
         {editId === null && (
@@ -225,7 +225,7 @@ export default function MachineEditScreen() {
           </View>
         )}
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

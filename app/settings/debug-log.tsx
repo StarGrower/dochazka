@@ -5,11 +5,11 @@
 
 import { useCallback, useState } from 'react';
 import { Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useFocusEffect } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import ScreenHeader from '@/components/ScreenHeader';
 import { clearDebugLog, listDebugLog } from '@/lib/db';
 import { geocodeKey, nearLocalityLabel, resolveLocalities } from '@/lib/geocode';
@@ -111,7 +111,7 @@ export default function DebugLogScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="LADICÍ DENÍK" />
 
       <View style={styles.buttonRow}>
@@ -149,7 +149,7 @@ export default function DebugLogScreen() {
         )}
         ListEmptyComponent={<Text style={styles.empty}>Zatím žádné záznamy.</Text>}
       />
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

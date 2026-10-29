@@ -5,10 +5,10 @@
 
 import { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
 
 import BottomSheetModal from '@/components/BottomSheetModal';
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import { deleteClient, listClients, saveClient } from '@/lib/orders';
@@ -71,7 +71,7 @@ export default function ClientsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="ODBĚRATELÉ" />
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.hint}>Stejný seznam jako u zakázek. Vybírá se na faktuře, nový jde přidat i přímo z faktury.</Text>
@@ -125,7 +125,7 @@ export default function ClientsScreen() {
             />
           ))}
       </BottomSheetModal>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

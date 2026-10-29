@@ -6,10 +6,10 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 
 import BottomSheetModal from '@/components/BottomSheetModal';
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import ToggleRow from '@/components/ToggleRow';
@@ -484,7 +484,7 @@ export default function LogbookScreen() {
     : [];
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="KNIHA JÍZD" onBack={() => router.back()} right={busy ? <ActivityIndicator color={colors.accent} /> : undefined} />
       {trips === null ? (
         <ActivityIndicator color={colors.accent} style={styles.loading} />
@@ -650,7 +650,7 @@ export default function LogbookScreen() {
         />
 
       </BottomSheetModal>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

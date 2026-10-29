@@ -6,10 +6,10 @@
 
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
 import BottomSheetModal from '@/components/BottomSheetModal';
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import OrderBadge from '@/components/OrderBadge';
 import ToggleRow from '@/components/ToggleRow';
@@ -65,9 +65,9 @@ export default function OrderDetailScreen() {
 
   if (!detail) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeScreen style={styles.container}>
         <ActivityIndicator color={colors.accent} style={styles.loading} />
-      </SafeAreaView>
+      </SafeScreen>
     );
   }
   const { order, stats } = detail;
@@ -129,7 +129,7 @@ export default function OrderDetailScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <View style={styles.top}>
         <TouchableOpacity style={styles.back} onPress={() => router.back()} hitSlop={8} accessibilityLabel="Zpět">
           <Text style={styles.backText}>‹</Text>
@@ -459,7 +459,7 @@ export default function OrderDetailScreen() {
           </View>
         ))}
       </BottomSheetModal>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -505,7 +505,7 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', gap: 8, marginTop: 4 },
   secondary: { flex: 1, minHeight: MIN_TOUCH, borderRadius: radii.card, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
   secondaryText: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(14) },
-  cta: { height: 52, borderRadius: radii.card, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', marginTop: 12, marginHorizontal: 16, marginBottom: 20 },
+  cta: { height: 52, borderRadius: radii.card, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', marginTop: 12, marginHorizontal: 16, marginBottom: 8 },
   ctaDisabled: { opacity: 0.4 },
   ctaText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(19), letterSpacing: 0.95 },
   modalTitle: { color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(16), letterSpacing: 1, marginBottom: 10 },

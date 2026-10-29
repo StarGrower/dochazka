@@ -6,9 +6,9 @@
 
 import { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import NumPad from '@/components/NumPad';
 import ScreenHeader from '@/components/ScreenHeader';
@@ -147,7 +147,7 @@ export default function PolohaSettingsScreen() {
   if (!settings) return null;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="POLOHA A TRASY" />
 
       <ScrollView contentContainerStyle={styles.content}>
@@ -289,7 +289,7 @@ export default function PolohaSettingsScreen() {
           <Text style={styles.value}>{placesCount} míst ›</Text>
         </TouchableOpacity>
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

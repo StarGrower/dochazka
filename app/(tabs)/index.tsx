@@ -8,11 +8,11 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 
 import HealthBanner from '@/components/HealthBanner';
 import MonthGrid from '@/components/MonthGrid';
+import SafeScreen from '@/components/SafeScreen';
 import { isBackupConfigured } from '@/lib/backup';
 import { getInternalValue, getMonthSummary, getMonthTripKm, getSettings, isDatabaseEmpty, setInternalValue } from '@/lib/db';
 import { runHealthChecks, type HealthCheck } from '@/lib/health';
@@ -82,7 +82,7 @@ export default function CalendarScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container} tab>
       <ScrollView contentContainerStyle={styles.scrollContent}>
       {problems.length > 0 && <HealthBanner problem={problems[0]} count={problems.length} />}
       {offerRestore && (
@@ -137,7 +137,7 @@ export default function CalendarScreen() {
         <Text style={styles.ctaButtonText}>+ ZAPSAT DNEŠEK</Text>
       </TouchableOpacity>
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

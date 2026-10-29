@@ -5,10 +5,10 @@
 
 import { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 
 import BottomSheetModal from '@/components/BottomSheetModal';
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import ToggleRow from '@/components/ToggleRow';
@@ -79,7 +79,7 @@ export default function WorkersScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="PRACOVNÍCI" onBack={() => router.back()} />
       <ScrollView contentContainerStyle={styles.sc}>
         <Text style={styles.hint}>
@@ -145,7 +145,7 @@ export default function WorkersScreen() {
           </>
         )}
       </BottomSheetModal>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

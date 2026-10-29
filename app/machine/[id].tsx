@@ -5,10 +5,10 @@
 
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
 import BottomSheetModal from '@/components/BottomSheetModal';
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import { formatKc, formatNumberCs, toIsoDate } from '@/lib/format';
 import { parseCounterText, type ConsumptionSegment, type ServiceStatus } from '@/lib/machineCalc';
@@ -105,9 +105,9 @@ export default function MachineScreen() {
 
   if (!machine) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeScreen style={styles.container}>
         <ActivityIndicator color={colors.accent} style={styles.loading} />
-      </SafeAreaView>
+      </SafeScreen>
     );
   }
   const unit = COUNTER_LABEL[machine.counterUnit];
@@ -227,7 +227,7 @@ export default function MachineScreen() {
   const openDefects = defects.filter((d) => !d.resolvedAt);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <View style={styles.top}>
         <TouchableOpacity style={styles.back} onPress={() => router.back()} hitSlop={8}>
           <Text style={styles.backText}>‹</Text>
@@ -674,7 +674,7 @@ export default function MachineScreen() {
           </TouchableOpacity>
         )}
       </BottomSheetModal>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

@@ -3,15 +3,15 @@
 // app/settings/*.tsx (šipka zpět, stejný styl).
 
 import { ScrollView, StyleSheet, Text } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import SettingsRow from '@/components/SettingsRow';
 import { colors, fonts, fs } from '@/theme';
 
 export default function SettingsHubScreen() {
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container} tab>
       <Text style={styles.screenTitle}>NASTAVENÍ</Text>
 
       <ScrollView contentContainerStyle={styles.list}>
@@ -76,7 +76,7 @@ export default function SettingsHubScreen() {
           onPress={() => router.push('/settings/aplikace')}
         />
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

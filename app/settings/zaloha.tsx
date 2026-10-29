@@ -4,13 +4,13 @@
 
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import * as Print from 'expo-print';
 import { useFocusEffect } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
 
 import BottomSheetModal from '@/components/BottomSheetModal';
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import DochazkaNative, { type BackupFileInfo } from '../../modules/dochazka-native/src/DochazkaNative';
@@ -141,7 +141,7 @@ export default function ZalohaScreen() {
   const keyText = recoveryKey ?? '';
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="ZÁLOHA" />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.card}>
@@ -330,7 +330,7 @@ export default function ZalohaScreen() {
           </>
         )}
       </BottomSheetModal>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

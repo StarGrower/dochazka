@@ -1,61 +1,73 @@
 // Náhled PDF faktury před sdílením - stejné HTML jako PDF (lib/invoiceReport.ts,
 // režim "preview"), zobrazené ve WebView přes celou obrazovku.
+// Ovládání je ve spodní liště (components/ScreenModal.tsx): vlevo Zavřít,
+// vpravo hlavní akce; nahoře jen nadpis. Stažení dolů náhled zavře.
 
-import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRef } from 'react';
+import { Platform, StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
 
-import { colors, fonts, fs, MIN_TOUCH, radii } from '@/theme';
+import ScreenModal, { ModalBarButton } from './ScreenModal';
+
+export interface PreviewAction {
+  label: string;
+  onPress: () => void;
+  primary?: boolean; // hlavní akce (žlutá, vpravo)
+}
 
 interface InvoicePreviewProps {
   html: string | null; // null = zavřeno
   title: string;
-  shareLabel?: string; // bez tlačítka, když chybí
-  onShare?: () => void;
+  actions?: PreviewAction[]; // pořadí zleva doprava, hlavní poslední
   onClose: () => void;
 }
 
-export default function InvoicePreview({ html, title, shareLabel, onShare, onClose }: InvoicePreviewProps) {
+const BG = '#0B0B0A';
+
+export default function InvoicePreview({ html, title, actions = [], onClose }: InvoicePreviewProps) {
+  // Akce (sdílení, potvrzení vystavení) až po zavření náhledu - na iOS se
+  // Alert / sdílecí list otevřený během zavírání modalu ztratí.
+  const pending = useRef<(() => void) | null>(null);
+  const run = (fn: () => void) => {
+    if (Platform.OS === 'ios') pending.current = fn;
+    onClose();
+    if (Platform.OS !== 'ios') fn();
+  };
+  const dismissed = () => {
+    const fn = pending.current;
+    pending.current = null;
+    fn?.();
+  };
   return (
-    <Modal visible={html !== null} animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
-      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-        <View style={styles.bar}>
-          <TouchableOpacity style={styles.close} onPress={onClose} hitSlop={8} accessibilityLabel="Zavřít náhled">
-            <Text style={styles.closeText}>Zavřít</Text>
-          </TouchableOpacity>
-          <Text style={styles.title} numberOfLines={1}>
-            {title}
-          </Text>
-          {shareLabel && onShare ? (
-            <TouchableOpacity style={styles.share} onPress={onShare}>
-              <Text style={styles.shareText}>{shareLabel}</Text>
-            </TouchableOpacity>
-          ) : (
-            <View style={styles.close} />
-          )}
-        </View>
-        {html !== null && (
-          <WebView
-            style={styles.web}
-            originWhitelist={['*']}
-            source={{ html }}
-            javaScriptEnabled
-            setBuiltInZoomControls
-            showsVerticalScrollIndicator
-          />
-        )}
-      </SafeAreaView>
-    </Modal>
+    <ScreenModal
+      visible={html !== null}
+      onClose={onClose}
+      onDismiss={dismissed}
+      title={title}
+      background={BG}
+      footer={
+        <>
+          <ModalBarButton label="Zavřít" onPress={onClose} />
+          {actions.map((a) => (
+            <ModalBarButton key={a.label} label={a.label} onPress={() => run(a.onPress)} primary={a.primary} />
+          ))}
+        </>
+      }
+    >
+      {html !== null && (
+        <WebView
+          style={styles.web}
+          originWhitelist={['*']}
+          source={{ html }}
+          javaScriptEnabled
+          setBuiltInZoomControls
+          showsVerticalScrollIndicator
+        />
+      )}
+    </ScreenModal>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0B0B0A' },
-  bar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: colors.background },
-  close: { minWidth: 72, minHeight: MIN_TOUCH, justifyContent: 'center' },
-  closeText: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(15) },
-  title: { flex: 1, textAlign: 'center', color: colors.text, fontFamily: fonts.headingBold, fontSize: fs(17), letterSpacing: 0.8 },
-  share: { minHeight: MIN_TOUCH, paddingHorizontal: 14, borderRadius: radii.card, backgroundColor: colors.accent, justifyContent: 'center' },
-  shareText: { color: colors.onAccent, fontFamily: fonts.headingBold, fontSize: fs(15), letterSpacing: 0.6 },
-  web: { flex: 1, backgroundColor: '#0B0B0A' },
+  web: { flex: 1, backgroundColor: BG },
 });

@@ -4,9 +4,9 @@
 
 import { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, type Href } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import ScreenHeader from '@/components/ScreenHeader';
 import { runHealthChecks, type HealthAction, type HealthLevel, type HealthReport } from '@/lib/health';
 import { openIosSettings } from '@/lib/locationTracking';
@@ -37,7 +37,7 @@ export default function StavZaznamuScreen() {
   const lastEvent = report?.lastEventAt ? new Date(report.lastEventAt) : null;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="STAV ZÁZNAMU" />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.card}>
@@ -61,7 +61,7 @@ export default function StavZaznamuScreen() {
           </TouchableOpacity>
         ))}
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

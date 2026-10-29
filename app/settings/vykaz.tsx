@@ -5,12 +5,12 @@
 
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { File, Paths } from 'expo-file-system';
 import * as Print from 'expo-print';
 import { useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import SignaturePad from '@/components/SignaturePad';
@@ -156,7 +156,7 @@ export default function VykazScreen() {
   const r = range();
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="VÝKAZ PRO ŠÉFA" />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" scrollEnabled={!signing || !!signature}>
         <Text style={styles.sectionHeader}>OBDOBÍ</Text>
@@ -238,7 +238,7 @@ export default function VykazScreen() {
           </>
         )}
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

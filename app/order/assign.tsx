@@ -5,9 +5,9 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import ScreenHeader from '@/components/ScreenHeader';
 import { listPlaces } from '@/lib/db';
 import { formatKc, formatNumberCs, formatQuantity, toIsoDate } from '@/lib/format';
@@ -229,7 +229,7 @@ export default function AssignWorkScreen() {
           }));
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="NEPŘIŘAZENÁ PRÁCE" subtitle={order?.name} onBack={() => router.back()} />
       {records === null ? (
         <ActivityIndicator color={colors.accent} style={styles.loading} />
@@ -257,7 +257,7 @@ export default function AssignWorkScreen() {
       <TouchableOpacity style={[styles.cta, selected.size === 0 && styles.ctaDisabled]} disabled={selected.size === 0 || busy} onPress={assign}>
         {busy ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.ctaText}>PŘIŘADIT K ZAKÁZCE ({selected.size})</Text>}
       </TouchableOpacity>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

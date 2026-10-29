@@ -4,9 +4,9 @@
 
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import { czDate } from '@/lib/invoiceCalc';
 import { kcInvoice } from '@/lib/invoiceReport';
 import { listInvoices } from '@/lib/invoices';
@@ -45,7 +45,7 @@ export default function InvoicesScreen() {
   const visible = (items ?? []).filter((i) => (filter === 'all' ? true : filter === 'unpaid' ? i.status === 'issued' : i.status === filter));
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container} tab>
       <View style={styles.top}>
         <Text style={styles.h1}>FAKTURACE</Text>
         <TouchableOpacity style={styles.clients} onPress={() => router.push('/invoice/clients')}>
@@ -103,7 +103,7 @@ export default function InvoicesScreen() {
       <TouchableOpacity style={styles.cta} onPress={() => router.push('/invoice/edit')}>
         <Text style={styles.ctaText}>+ NOVÁ FAKTURA</Text>
       </TouchableOpacity>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

@@ -12,11 +12,11 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
 import InvoiceItemsEditor, { itemToRow, rowToItem, type ItemRow } from '@/components/InvoiceItemsEditor';
 import InvoicePreview from '@/components/InvoicePreview';
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import ToggleRow from '@/components/ToggleRow';
@@ -113,9 +113,9 @@ export default function InvoiceEditScreen() {
 
   if (!inv) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeScreen style={styles.container}>
         <ActivityIndicator color={colors.accent} style={styles.loading} />
-      </SafeAreaView>
+      </SafeScreen>
     );
   }
 
@@ -323,7 +323,7 @@ export default function InvoiceEditScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader
         title="FAKTURA"
         subtitle={fromOrder ? `Ze zakázky ${inv.orderName ?? ''}` : 'Bez zakázky'}
@@ -562,12 +562,18 @@ export default function InvoiceEditScreen() {
 
       <InvoicePreview
         html={previewHtml}
-        title={`FAKTURA ${inv.number}`}
-        shareLabel="Sdílet"
-        onShare={shareCurrent}
+        title={draft ? 'KONCEPT FAKTURY' : `FAKTURA ${inv.number}`}
+        actions={
+          draft
+            ? [
+                { label: 'Sdílet koncept', onPress: shareCurrent },
+                { label: 'VYSTAVIT', onPress: issue, primary: true },
+              ]
+            : [{ label: 'SDÍLET', onPress: shareCurrent, primary: true }]
+        }
         onClose={() => setPreviewHtml(null)}
       />
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

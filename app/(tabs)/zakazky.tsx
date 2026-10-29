@@ -5,10 +5,10 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 
 import OrderBadge, { INVOICED_BLUE } from '@/components/OrderBadge';
+import SafeScreen from '@/components/SafeScreen';
 import { formatKc, monthLabel } from '@/lib/format';
 import { listOrderSummaries, type OrderSummary } from '@/lib/orders';
 import { BUDGET_WARN_PCT } from '@/lib/orderStats';
@@ -69,7 +69,7 @@ export default function ZakazkyScreen() {
   const now = new Date();
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container} tab>
       <View style={styles.top}>
         <View>
           <Text style={styles.h1}>ZAKÁZKY</Text>
@@ -153,7 +153,7 @@ export default function ZakazkyScreen() {
           );
         })}
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

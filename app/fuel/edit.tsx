@@ -5,10 +5,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import ToggleRow from '@/components/ToggleRow';
@@ -196,7 +196,7 @@ export default function FuelEditScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="TANKOVÁNÍ" onBack={() => router.back()} right={busy ? <ActivityIndicator color={colors.accent} /> : undefined} />
       <ScrollView contentContainerStyle={styles.sc} keyboardShouldPersistTaps="handled">
         <Text style={styles.section}>STROJ</Text>
@@ -291,7 +291,7 @@ export default function FuelEditScreen() {
           <Text style={styles.ctaText}>ULOŽIT TANKOVÁNÍ</Text>
         </TouchableOpacity>
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

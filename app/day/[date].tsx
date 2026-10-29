@@ -20,11 +20,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
 import BottomSheetModal from '@/components/BottomSheetModal';
 import DayMap, { type DayMapRoute, type DayMapStop } from '@/components/DayMap';
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import StaySheet, { type StayRow, type StaySheetTarget } from '@/components/StaySheet';
@@ -724,7 +724,7 @@ export default function DayDetailScreen() {
   });
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader
         title={formatDayHeaderTitle(date)}
         subtitle={formatDayHeaderSummary(totals.hour, dayWorkKm > 0 ? dayWorkKm : null)}
@@ -1024,7 +1024,7 @@ export default function DayDetailScreen() {
           </>
         )}
       </BottomSheetModal>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

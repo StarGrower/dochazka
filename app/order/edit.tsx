@@ -5,9 +5,9 @@
 
 import { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import { ORDER_STATUS_LABEL } from '@/components/OrderBadge';
 import ScreenHeader from '@/components/ScreenHeader';
@@ -166,7 +166,7 @@ export default function OrderEditScreen() {
   if (!loaded) return null;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title={orderId ? 'UPRAVIT ZAKÁZKU' : 'NOVÁ ZAKÁZKA'} />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.label}>NÁZEV</Text>
@@ -262,7 +262,7 @@ export default function OrderEditScreen() {
           </TouchableOpacity>
         )}
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

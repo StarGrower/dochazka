@@ -4,9 +4,9 @@
 
 import { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import ToggleRow from '@/components/ToggleRow';
@@ -90,7 +90,7 @@ export default function MojeUdajeScreen() {
   const iban = parsed && 'account' in parsed ? czIban(parsed.account) : null;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title="MOJE ÚDAJE" />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.hint}>Zobrazí se v hlavičce výkazu a jako dodavatel na faktuře.</Text>
@@ -179,7 +179,7 @@ export default function MojeUdajeScreen() {
         />
         <Text style={styles.hint}>Tiskne se drobně pod dodavatelem - doplň název živnostenského úřadu.</Text>
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 

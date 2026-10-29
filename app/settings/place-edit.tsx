@@ -8,11 +8,11 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import { AppleMaps } from 'expo-maps';
 import { router, useLocalSearchParams } from 'expo-router';
 
+import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import NumPad from '@/components/NumPad';
 import ScreenHeader from '@/components/ScreenHeader';
@@ -139,7 +139,7 @@ export default function PlaceEditScreen() {
   if (loading) return null;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeScreen style={styles.container}>
       <ScreenHeader title={placeId ? 'UPRAVIT MÍSTO' : 'NOVÉ MÍSTO'} />
 
       <ScrollView contentContainerStyle={styles.content}>
@@ -269,7 +269,7 @@ export default function PlaceEditScreen() {
           <Text style={styles.saveButtonText}>{saving ? 'UKLÁDÁM...' : 'ULOŽIT'}</Text>
         </TouchableOpacity>
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
