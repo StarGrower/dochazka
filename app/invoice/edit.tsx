@@ -14,13 +14,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
+import DatePickerSheet from '@/components/DatePickerSheet';
 import InvoiceItemsEditor, { itemToRow, rowToItem, type ItemRow } from '@/components/InvoiceItemsEditor';
 import PdfPreview from '@/components/PdfPreview';
 import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
 import ToggleRow from '@/components/ToggleRow';
-import { addDaysIso, czDate, formatDecimal, hoursMismatch, invoiceTotal, isValidInvoiceNumber, itemTotal, parseCzDate, parseDecimal } from '@/lib/invoiceCalc';
+import { addDaysIso, czDate, daysBetweenIso, formatDecimal, hoursMismatch, invoiceTotal, isValidInvoiceNumber, itemTotal, parseCzDate, parseDecimal } from '@/lib/invoiceCalc';
 import { invoiceFontsCss } from '@/lib/invoiceFonts';
 import { invoiceHtml, kcInvoice } from '@/lib/invoiceReport';
 import {
@@ -59,6 +60,7 @@ export default function InvoiceEditScreen() {
   // vypnuto (faktura jde ven, nic se nepřidá samo).
   const [withNotes, setWithNotes] = useState(false);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [duePickerOpen, setDuePickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [rows, setRows] = useState<ItemRow[]>([]);
   const [newClient, setNewClient] = useState<InvoiceParty | null>(null);
@@ -149,10 +151,22 @@ export default function InvoiceEditScreen() {
     const iso = parseCzDate(text);
     if (iso) update({ issueDate: iso });
   };
+  // Splatnost: zdrojem je počet dní (datum vystavení + dny), takže změna
+  // data vystavení posune splatnost a dny zůstanou. Přímo zvolené datum
+  // splatnosti se přepočte na dny od data vystavení.
   const setDays = (text: string) => {
     const t = text.replace(/\D/g, '').slice(0, 3);
     setDaysText(t);
     if (t !== '') update({ dueDays: Number(t) });
+  };
+  const setDueDate = (iso: string) => {
+    const days = daysBetweenIso(inv.issueDate, iso);
+    if (days < 0) {
+      Alert.alert('Datum splatnosti', 'Splatnost nesmí být před datem vystavení.');
+      return;
+    }
+    setDuePickerOpen(false);
+    setDays(String(days));
   };
 
   const validate = (forIssue: boolean): boolean => {
@@ -170,6 +184,10 @@ export default function InvoiceEditScreen() {
     }
     if (!issueOk) {
       Alert.alert('Datum vystavení', 'Zadej datum ve tvaru d. m. rrrr, např. 28. 10. 2026.');
+      return false;
+    }
+    if (!(inv.dueDays >= 0) || dueDate < inv.issueDate) {
+      Alert.alert('Datum splatnosti', 'Splatnost nesmí být před datem vystavení.');
       return false;
     }
     if (forIssue && !(newClient?.name ?? inv.client?.name ?? '').trim()) {
@@ -495,9 +513,19 @@ export default function InvoiceEditScreen() {
               })}
             </View>
           )}
-          <Text style={styles.hint}>
-            Splatnost: <Text style={styles.hintStrong}>{czDate(dueDate)}</Text>
-          </Text>
+          <TouchableOpacity
+            style={[styles.field, styles.fieldBorder]}
+            onPress={() => setDuePickerOpen(true)}
+            disabled={!draft}
+            accessibilityLabel="Datum splatnosti"
+          >
+            <Text style={styles.fieldLabel}>Datum splatnosti</Text>
+            <Text style={styles.dueValue}>
+              {czDate(dueDate)}
+              {draft ? ' ›' : ''}
+            </Text>
+          </TouchableOpacity>
+          <Text style={styles.hint}>Počet dní a datum se přepočítávají navzájem; při změně data vystavení zůstane počet dní.</Text>
         </View>
 
         <Text style={styles.section}>FORMA ÚHRADY</Text>
@@ -569,6 +597,15 @@ export default function InvoiceEditScreen() {
         </View>
       </ScrollView>
 
+      <DatePickerSheet
+        visible={duePickerOpen}
+        title="DATUM SPLATNOSTI"
+        valueIso={dueDate}
+        minIso={inv.issueDate}
+        onSelect={setDueDate}
+        onClose={() => setDuePickerOpen(false)}
+      />
+
       <PdfPreview
         html={previewHtml}
         title={previewDoc?.status === 'draft' ? 'KONCEPT FAKTURY' : `FAKTURA ${previewDoc?.number ?? ''}`}
@@ -618,6 +655,7 @@ const styles = StyleSheet.create({
   party: { color: colors.text, fontFamily: fonts.body, fontSize: fs(14), paddingHorizontal: 14, paddingBottom: 12 },
   hint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(13), paddingHorizontal: 14, paddingBottom: 12, paddingTop: 2 },
   hintStrong: { color: colors.text, fontFamily: fonts.bodySemiBold },
+  dueValue: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(17) },
   warn: { color: colors.accent, fontFamily: fonts.body, fontSize: fs(13), paddingHorizontal: 14, paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border },
   error: { color: colors.danger, fontFamily: fonts.body, fontSize: fs(13), paddingHorizontal: 14, paddingBottom: 10 },
   field: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, minHeight: 54, paddingHorizontal: 14, paddingVertical: 4 },

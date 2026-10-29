@@ -36,6 +36,13 @@ export function addDaysIso(iso: string, days: number): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+// Počet dní z `from` do `to` (YYYY-MM-DD), záporný když je `to` dřív.
+// Přes UTC, ať změna letního času nic neposune.
+export function daysBetweenIso(from: string, to: string): number {
+  const utc = (iso: string) => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)));
+  return Math.round((utc(to) - utc(from)) / 86400000);
+}
+
 // "1. 2. 2026" -> "2026-02-01"; null = neplatné datum.
 export function parseCzDate(text: string): string | null {
   const m = /^\s*(\d{1,2})\s*\.\s*(\d{1,2})\s*\.\s*(\d{4})\s*$/.exec(text);

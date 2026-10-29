@@ -327,6 +327,7 @@ export async function refreshDraft(inv: Invoice): Promise<Invoice> {
 
 export async function saveInvoice(inv: Invoice): Promise<number> {
   if (inv.status !== 'draft') throw new Error('Vystavená faktura se už nemění.');
+  if (!(inv.dueDays >= 0)) throw new Error('Splatnost nesmí být před datem vystavení.');
   const db = await getDb();
   const items = inv.items.filter((i) => i.name.trim() || i.quantity !== 0 || i.unitPriceKc !== 0);
   const total = invoiceTotal(items);

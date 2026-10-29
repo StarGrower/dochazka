@@ -1516,3 +1516,14 @@ pak navážu etapou 2 (uložená místa).
   - interní export zakázky: poznámky, výchozí zapnuto
   - výkaz pro šéfa: „S cenami“ a „Zahrnout poznámky ke dnům“ (vypnuto)
   - export pro odběratele: bez voleb (poznámky ani ceny bez cen neumí)
+
+## Splatnost faktury
+
+- Zdroj pravdy je počet dní (`invoices.due_days`), datum = vystavení + dny.
+  Změna data vystavení proto posune splatnost a dny zůstanou.
+- Datum splatnosti jde zvolit přímo (`components/DatePickerSheet.tsx`,
+  dny před vystavením nejdou vybrat) - přepočte se na počet dní
+  (`daysBetweenIso`, přes UTC kvůli změně času).
+- Splatnost před vystavením: hláška a neuloží se (UI i `saveInvoice`).
+- Rychlá volba 7/14/30 je zvýrazněná jen při přesné shodě dní. Výchozí dny
+  z Nastavení. QR (DT) i PDF berou výsledné datum splatnosti.

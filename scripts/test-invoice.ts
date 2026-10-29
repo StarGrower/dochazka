@@ -12,6 +12,7 @@ import {
   carryItem,
   carryKc,
   czDateWithWeekday,
+  daysBetweenIso,
   hoursMismatch,
   invoiceTotal,
   isValidInvoiceNumber,
@@ -319,6 +320,17 @@ const tests: Array<[string, () => void]> = [
     assert.equal(invoicePageCount(inv, true), 2);
     assert.equal(dayNoteText(' Den ', ['Zakázka', 'Den']), 'Den\nZakázka');
     assert.equal(dayNoteText(undefined, []), '');
+  }],
+  ['splatnost: dny <-> datum, posun s datem vystavení, QR s datem splatnosti', () => {
+    assert.equal(daysBetweenIso('2026-10-28', '2026-11-11'), 14);
+    assert.equal(daysBetweenIso('2026-10-20', '2026-10-30'), 10); // přes změnu času 25. 10.
+    assert.equal(daysBetweenIso('2026-10-28', '2026-10-27'), -1);
+    assert.equal(addDaysIso('2026-10-28', daysBetweenIso('2026-10-28', '2026-12-31')), '2026-12-31');
+    // nové datum vystavení + stejné dny = posunutá splatnost
+    assert.equal(addDaysIso('2026-11-02', 14), '2026-11-16');
+    const inv = sampleInvoice({ dueDays: 10, dueDate: '2026-11-07' });
+    assert.match(invoiceHtml(inv, { mode: 'print' }), /7\. 11\. 2026/);
+    assert.match(buildSpayd({ iban: 'CZ6508000000192000145399', amountKc: 100, vs: '1', dueDate: inv.dueDate, message: 'x' }), /\*DT:20261107\*/);
   }],
   ['stránkování: součty na poslední straně, jinak strana navíc', () => {
     assert.deepEqual(paginate([1, 1, 1], () => 10, 25, 25, 0).map((p) => p.length), [2, 1]);
