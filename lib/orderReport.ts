@@ -1,6 +1,8 @@
 // Export zakázky (etapa 5): pro odběratele (bez nákladů, s logem a mými
 // údaji) a interní (s náklady, výsledkem, lidmi a dny); PDF (HTML pro
 // expo-print) a Excel (XLSX). Servis se do nákladů nepočítá.
+// Poznámky ke dnům jen v interním exportu a jen se zapnutým přepínačem
+// (withNotes) - pod řádkem dne menším šedým písmem, v Excelu sloupec.
 
 import { formatHodiny, formatKc, formatNumberCs, toIsoDate } from './format';
 import { orderPeriod, type OrderDetail } from './orders';
@@ -23,7 +25,14 @@ function period(d: OrderDetail): string {
   return from === to ? czDate(from) : `${czDate(from)} – ${to ? czDate(to) : 'dosud'}`;
 }
 
-export function orderReportHtml(d: OrderDetail, kind: OrderReportKind, settings: AppSettings, client: Client | null, workerName: string | null = null): string {
+export function orderReportHtml(
+  d: OrderDetail,
+  kind: OrderReportKind,
+  settings: AppSettings,
+  client: Client | null,
+  workerName: string | null = null,
+  withNotes = kind === 'internal'
+): string {
   const s = d.stats;
   const me = [settings.profileName, settings.profileIco ? `IČO ${settings.profileIco}` : '', settings.profileDic ? `DIČ ${settings.profileDic}` : '', settings.profileAddress]
     .filter(Boolean)
@@ -68,7 +77,8 @@ export function orderReportHtml(d: OrderDetail, kind: OrderReportKind, settings:
       // Celkem = K fakturaci podle ceníku (u pevné ceny se liší, proto poznámka).
       const dayRows = s.days.map((x) => {
         const breakdown = x.items.length > 1 ? `<div class="sub">${x.items.map((i) => `${esc(i.name)} ${esc(i.quantityLabel)}`).join(' · ')}</div>` : '';
-        return `<tr><td>${czDate(x.date)}${breakdown}</td><td class="r">${x.hours > 0 ? formatHodiny(x.hours) : ''}</td><td class="r">${formatKc(x.amountKc)}</td></tr>`;
+        const row = `<tr${withNotes && x.note ? ' class="hasnote"' : ''}><td>${czDate(x.date)}${breakdown}</td><td class="r">${x.hours > 0 ? formatHodiny(x.hours) : ''}</td><td class="r">${formatKc(x.amountKc)}</td></tr>`;
+        return withNotes && x.note ? `${row}<tr class="note"><td colspan="3">${esc(x.note).replace(/\n/g, '<br/>')}</td></tr>` : row;
       });
       const daysTotal = s.days.reduce((sum, x) => sum + x.amountKc, 0);
       parts.push(
@@ -88,11 +98,12 @@ export function orderReportHtml(d: OrderDetail, kind: OrderReportKind, settings:
   table{width:100%;border-collapse:collapse} td{padding:5px 4px;border-bottom:1px solid #eee}
   .r{text-align:right;white-space:nowrap} .tot td{font-weight:700;border-top:2px solid #F2B705}
   .th td{font-size:10px;color:#6b685f;text-transform:uppercase;letter-spacing:.04em} .sub{font-size:9px;color:#8b877c;margin-top:2px}
+  .hasnote td{border-bottom:none} .note td{font-size:9.5px;color:#8b877c;font-style:italic;padding:0 4px 5px}
   .mut{color:#8b877c;font-size:10px} .foot{margin-top:24px;font-size:9px;color:#8b877c}
   </style></head><body>${parts.join('\n')}</body></html>`;
 }
 
-export function orderReportXlsx(d: OrderDetail, kind: OrderReportKind): Uint8Array {
+export function orderReportXlsx(d: OrderDetail, kind: OrderReportKind, withNotes = kind === 'internal'): Uint8Array {
   const s = d.stats;
   // Čísla zůstávají v buňkách číselná (jdou sčítat), "Kč" / "h" a mezery
   // po tisících doplní formát sloupce.
@@ -117,11 +128,17 @@ export function orderReportXlsx(d: OrderDetail, kind: OrderReportKind): Uint8Arr
     sheets.push({
       name: 'Po dnech',
       rows: [
-        ['Datum', 'Hodiny', 'Částka', 'Rozpis'],
-        ...s.days.map((x) => [x.date, h(x.hours), n(x.amountKc), x.items.length > 1 ? x.items.map((i) => `${i.name} ${i.quantityLabel}`).join(' · ') : '']),
-        [fixed ? 'Celkem podle ceníku' : 'Celkem', h(s.hours), n(s.days.reduce((sum, x) => sum + x.amountKc, 0)), ''],
+        ['Datum', 'Hodiny', 'Částka', 'Rozpis', ...(withNotes ? ['Poznámka'] : [])],
+        ...s.days.map((x) => [
+          x.date,
+          h(x.hours),
+          n(x.amountKc),
+          x.items.length > 1 ? x.items.map((i) => `${i.name} ${i.quantityLabel}`).join(' · ') : '',
+          ...(withNotes ? [x.note] : []),
+        ]),
+        [fixed ? 'Celkem podle ceníku' : 'Celkem', h(s.hours), n(s.days.reduce((sum, x) => sum + x.amountKc, 0)), '', ...(withNotes ? [''] : [])],
       ],
-      formats: { 1: 'h', 2: 'kc' },
+      formats: { 1: 'h', 2: 'kc', 4: 'text' },
     });
     sheets.push({ name: 'Lidé', rows: [['Jméno', 'Hodiny'], ...s.people.map((p) => [p.name, h(p.hours)])], formats: { 1: 'h' } });
   }

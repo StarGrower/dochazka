@@ -25,6 +25,7 @@ import {
   type WorkSource,
 } from '../lib/invoiceCalc';
 import { addressLines, invoiceHtml, invoicePageCount, kc2, kcInvoice, paginate } from '../lib/invoiceReport';
+import { dayNoteText } from '../lib/orderStats';
 import { buildSpayd, qrSvg, spaydMessage } from '../lib/spayd';
 import type { Invoice } from '../lib/types';
 
@@ -307,6 +308,17 @@ const tests: Array<[string, () => void]> = [
     // s převzatým zbytkem se hodiny počítají včetně něj
     assert.equal(hoursMismatch([...inv.items, carryItem(carry)], inv.workLog, [carry]), null);
     assert.deepEqual(hoursMismatch(inv.items, inv.workLog, [carry]), { itemHours: 20.5, workHours: 23 });
+  }],
+  ['poznámky ke dnům: výchozí vypnuto, s přepínačem pod posledním řádkem dne', () => {
+    const inv = sampleInvoice({ workNotes: [{ date: '2026-10-26', note: 'Dokončeno <plot>\nPředáno' }] });
+    assert.doesNotMatch(invoiceHtml(inv, { mode: 'print' }), /Dokončeno/);
+    const html = invoiceHtml(inv, { mode: 'print', withNotes: true });
+    assert.match(html, /<tr class="dnote"><td colspan="6">Dokončeno &lt;plot&gt;<br>Předáno<\/td><\/tr>/);
+    // dva řádky 26. 10. -> poznámka až za druhým
+    assert.equal(html.split('class="hasnote"').length - 1, 1);
+    assert.equal(invoicePageCount(inv, true), 2);
+    assert.equal(dayNoteText(' Den ', ['Zakázka', 'Den']), 'Den\nZakázka');
+    assert.equal(dayNoteText(undefined, []), '');
   }],
   ['stránkování: součty na poslední straně, jinak strana navíc', () => {
     assert.deepEqual(paginate([1, 1, 1], () => 10, 25, 25, 0).map((p) => p.length), [2, 1]);

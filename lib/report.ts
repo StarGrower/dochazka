@@ -26,6 +26,7 @@ export interface ReportOptions {
   withPrices: boolean;
   withMap: boolean;
   detailed: boolean; // pobyty s časy a přejezdy; jinak souhrn po dnech
+  withNotes?: boolean; // poznámky ke dnům (výchozí vypnuto - jde ven šéfovi)
   signatureSvgPath: string | null; // podpis prstem (SVG path ve viewBoxu 0 0 300 100)
   // Doplněk etapy 5: jen jeden pracovník (null / chybí = všichni). Pobyty
   // jsou jen moje, jízdy podle řidiče.
@@ -290,11 +291,12 @@ export async function reportHtml(data: ReportData, settings: AppSettings): Promi
     parts.push(
       `<tr class="${d.weekend || d.holiday ? 'we' : ''}"><td>${dayName}</td><td>${items || '<span class="mut">-</span>'}</td><td class="r">${d.km > 0 ? formatNumberCs(Math.round(d.km * 10) / 10) : ''}</td>${options.withPrices ? `<td class="r">${formatKc(d.amountKc)}</td>` : ''}</tr>`
     );
-    if (options.detailed && (d.stays.length > 0 || d.trips.length > 0 || d.note)) {
+    const note = options.withNotes ? d.note.trim() : '';
+    if ((options.detailed && (d.stays.length > 0 || d.trips.length > 0)) || note) {
       const lines = [
-        ...d.stays.map((s) => `▪ ${esc(s.placeName)} ${s.from}–${s.to} (${formatDurationHM(s.durationMs)})`),
-        ...d.trips.map((t) => `↦ ${esc(t.fromName)} → ${esc(t.toName)} ${t.from}–${t.to} · ${t.estimate ? '≈ ' : ''}${formatNumberCs(Math.round(t.km * 10) / 10)} km`),
-        ...(d.note ? [`Poznámka: ${esc(d.note)}`] : []),
+        ...(options.detailed ? d.stays.map((s) => `▪ ${esc(s.placeName)} ${s.from}–${s.to} (${formatDurationHM(s.durationMs)})`) : []),
+        ...(options.detailed ? d.trips.map((t) => `↦ ${esc(t.fromName)} → ${esc(t.toName)} ${t.from}–${t.to} · ${t.estimate ? '≈ ' : ''}${formatNumberCs(Math.round(t.km * 10) / 10)} km`) : []),
+        ...(note ? [`<i>Poznámka: ${esc(note).replace(/\n/g, '<br/>')}</i>`] : []),
       ];
       parts.push(`<tr class="det"><td></td><td colspan="${options.withPrices ? 3 : 2}">${lines.join('<br/>')}</td></tr>`);
     }
@@ -335,12 +337,14 @@ export async function reportHtml(data: ReportData, settings: AppSettings): Promi
 // --- CSV a XLSX ---
 
 function rowsForExport(data: ReportData): string[][] {
-  const head = ['Datum', 'Den', 'Stroj / práce', 'Pracovník', 'Místo', 'Od', 'Do', 'Množství', 'Jednotka', 'Příplatek %', ...(data.options.withPrices ? ['Sazba Kč', 'Částka Kč'] : []), 'Km přejezdů'];
+  const withNotes = !!data.options.withNotes;
+  const head = ['Datum', 'Den', 'Stroj / práce', 'Pracovník', 'Místo', 'Od', 'Do', 'Množství', 'Jednotka', 'Příplatek %', ...(data.options.withPrices ? ['Sazba Kč', 'Částka Kč'] : []), 'Km přejezdů', ...(withNotes ? ['Poznámka'] : [])];
   const unitName = { hour: 'h', day: 'den', km: 'km' } as const;
   const rows: string[][] = [head];
   for (const d of data.days) {
     const base = [d.date, d.label.split(' ')[0]];
-    if (d.records.length === 0) rows.push([...base, '', '', '', '', '', '', '', '', ...(data.options.withPrices ? ['', ''] : []), formatNumberCs(Math.round(d.km * 10) / 10)]);
+    const note = withNotes ? [d.note.trim()] : [];
+    if (d.records.length === 0) rows.push([...base, '', '', '', '', '', '', '', '', ...(data.options.withPrices ? ['', ''] : []), formatNumberCs(Math.round(d.km * 10) / 10), ...note]);
     d.records.forEach((r, i) => {
       rows.push([
         ...base,
@@ -354,6 +358,7 @@ function rowsForExport(data: ReportData): string[][] {
         formatNumberCs(r.surchargePct),
         ...(data.options.withPrices ? [formatNumberCs(r.rateKc), formatNumberCs(Math.round(recordAmountKc(r) * 100) / 100)] : []),
         i === 0 ? formatNumberCs(Math.round(d.km * 10) / 10) : '',
+        ...(withNotes ? [i === 0 ? d.note.trim() : ''] : []),
       ]);
     });
   }
@@ -375,9 +380,9 @@ export function reportCsv(data: ReportData): string {
 const xmlEsc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 // Formát sloupce v Excelu: 'kc' = "5 383 Kč", 'h' = "15,4 h" (buňka
-// zůstává číslem, jde sčítat).
-export type XlsxColumnFormat = 'kc' | 'h';
-const FORMAT_STYLE: Record<XlsxColumnFormat, number> = { kc: 2, h: 3 };
+// zůstává číslem, jde sčítat); 'text' = vždy text (poznámka "12" není číslo).
+export type XlsxColumnFormat = 'kc' | 'h' | 'text';
+const FORMAT_STYLE: Record<Exclude<XlsxColumnFormat, 'text'>, number> = { kc: 2, h: 3 };
 
 function sheetXml(rows: string[][], formats: Partial<Record<number, XlsxColumnFormat>> = {}): string {
   const colName = (i: number) => String.fromCharCode(65 + i); // výkaz má méně než 26 sloupců
@@ -386,8 +391,8 @@ function sheetXml(rows: string[][], formats: Partial<Record<number, XlsxColumnFo
       const cells = row
         .map((value, c) => {
           const ref = `${colName(c)}${r + 1}`;
-          const numeric = r > 0 && /^-?\d+(,\d+)?$/.test(value);
           const fmt = formats[c];
+          const numeric = r > 0 && fmt !== 'text' && /^-?\d+(,\d+)?$/.test(value);
           return numeric
             ? `<c r="${ref}"${fmt ? ` s="${FORMAT_STYLE[fmt]}"` : ''}><v>${value.replace(',', '.')}</v></c>`
             : `<c r="${ref}" t="inlineStr"${r === 0 ? ' s="1"' : ''}><is><t>${xmlEsc(value)}</t></is></c>`;
@@ -401,8 +406,9 @@ function sheetXml(rows: string[][], formats: Partial<Record<number, XlsxColumnFo
 
 // Minimální skutečné XLSX (OOXML v ZIPu) - listy Dny a Přejezdy.
 export function reportXlsx(data: ReportData): Uint8Array {
+  const days = rowsForExport(data);
   return xlsxFromSheets([
-    { name: 'Dny', rows: rowsForExport(data) },
+    { name: 'Dny', rows: days, formats: data.options.withNotes ? { [days[0].length - 1]: 'text' } : {} },
     { name: 'Přejezdy', rows: tripRows(data) },
   ]);
 }

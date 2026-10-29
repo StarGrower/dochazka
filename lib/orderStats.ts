@@ -22,6 +22,7 @@ export interface StatsRecord {
   date: string;
   workerId: number; // kdo pracoval (people.id)
   invoiceBatchId: number | null;
+  note?: string; // poznámka jen pro tuhle zakázku (migrace v11)
 }
 
 export interface StatsTrip {
@@ -48,6 +49,7 @@ export interface OrderStatsInput {
   fuelLiters: number;
   invoicedKc: number; // součet vystavených podkladů
   people: Map<number, string>;
+  dayNotes?: Map<string, string>; // poznámky ke dnům (date -> text)
 }
 
 export interface OrderStats {
@@ -66,8 +68,9 @@ export interface OrderStats {
   kcPerHour: number | null;
   people: { name: string; hours: number }[];
   // hours = součet hodinových zápisů dne (všechny práce a lidé), items =
-  // rozpis po druzích práce (pro PDF, když je jich víc než jeden).
-  days: { date: string; amountKc: number; hours: number; items: { name: string; quantityLabel: string }[] }[];
+  // rozpis po druzích práce (pro PDF, když je jich víc než jeden), note =
+  // poznámka ke dni + poznámky záznamů téhle zakázky (každá na řádek).
+  days: { date: string; amountKc: number; hours: number; items: { name: string; quantityLabel: string }[]; note: string }[];
   budgetPct: number | null; // ratesTotal / rozpočet
 }
 
@@ -85,6 +88,7 @@ export function computeOrderStats(input: OrderStatsInput): OrderStats {
   const hoursByDay = new Map<string, number>();
   const itemsByDay = new Map<string, Map<number, { name: string; hour: number; day: number; km: number }>>();
   const byPerson = new Map<number, number>();
+  const recordNotesByDay = new Map<string, string[]>();
   let hours = 0;
   let unbilledRates = 0;
 
@@ -106,6 +110,12 @@ export function computeOrderStats(input: OrderStatsInput): OrderStats {
       byPerson.set(r.workerId, (byPerson.get(r.workerId) ?? 0) + r.quantity);
     }
     if (r.invoiceBatchId === null) unbilledRates += a;
+    const note = r.note?.trim();
+    if (note) {
+      const list = recordNotesByDay.get(r.date) ?? [];
+      if (!list.includes(note)) list.push(note);
+      recordNotesByDay.set(r.date, list);
+    }
   }
 
   let km = 0;
@@ -160,10 +170,18 @@ export function computeOrderStats(input: OrderStatsInput): OrderStats {
         amountKc,
         hours: hoursByDay.get(date) ?? 0,
         items: [...(itemsByDay.get(date)?.values() ?? [])].map((i) => ({ name: i.name, quantityLabel: quantityLabel(i) })),
+        note: dayNoteText(input.dayNotes?.get(date), recordNotesByDay.get(date) ?? []),
       }))
       .sort((a, b) => b.date.localeCompare(a.date)),
     budgetPct: budget && budget > 0 ? (ratesTotalKc / budget) * 100 : null,
   };
+}
+
+// Poznámka dne do výkazu zakázky: poznámka ke dni a pod ní poznámky
+// záznamů zakázky (bez opakování stejného textu).
+export function dayNoteText(dayNote: string | undefined, recordNotes: string[]): string {
+  const day = dayNote?.trim() ?? '';
+  return [day, ...recordNotes.filter((n) => n !== day)].filter(Boolean).join('\n');
 }
 
 // Blížení k rozpočtu (zadání: "upozornění při blížení").

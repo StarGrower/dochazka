@@ -54,6 +54,9 @@ export default function InvoiceEditScreen() {
   const [daysText, setDaysText] = useState('');
   const [takenNumbers, setTakenNumbers] = useState<Record<string, boolean>>({});
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  // Poznámky ke dnům ve výpisu prací - jen pro tohle sdílení, výchozí vypnuto
+  // (faktura jde ven, nic se nepřidá samo).
+  const [withNotes, setWithNotes] = useState(false);
   const [busy, setBusy] = useState(false);
   const [rows, setRows] = useState<ItemRow[]>([]);
   const [newClient, setNewClient] = useState<InvoiceParty | null>(null);
@@ -190,7 +193,7 @@ export default function InvoiceEditScreen() {
     }
   };
 
-  const html = async (doc: Invoice, mode: 'print' | 'preview') => invoiceHtml(doc, { mode, fontsCss: await invoiceFontsCss() });
+  const html = async (doc: Invoice, mode: 'print' | 'preview') => invoiceHtml(doc, { mode, fontsCss: await invoiceFontsCss(), withNotes });
 
   const openPreview = async () => {
     setBusy(true);
@@ -511,6 +514,14 @@ export default function InvoiceEditScreen() {
               disabled={!draft}
               onValueChange={(v) => update({ withWorkLog: v })}
             />
+            {inv.withWorkLog && (inv.workNotes?.length ?? 0) > 0 && (
+              <ToggleRow
+                label="Zahrnout poznámky ke dnům"
+                description="Do výpisu prací pod řádek dne. Výchozí vypnuto - faktura jde ven"
+                value={withNotes}
+                onValueChange={setWithNotes}
+              />
+            )}
           </>
         )}
 

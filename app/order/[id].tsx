@@ -12,6 +12,7 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import BottomSheetModal from '@/components/BottomSheetModal';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import OrderBadge from '@/components/OrderBadge';
+import ToggleRow from '@/components/ToggleRow';
 import { getSettings } from '@/lib/db';
 import { formatHodiny, formatKc, formatNumberCs, toIsoDate } from '@/lib/format';
 import { EXPENSE_LABEL, orderReportHtml, orderReportXlsx, type OrderReportKind } from '@/lib/orderReport';
@@ -44,6 +45,8 @@ export default function OrderDetailScreen() {
   const [invoiceOpen, setInvoiceOpen] = useState(false);
   const [invoiceNote, setInvoiceNote] = useState('');
   const [exportOpen, setExportOpen] = useState(false);
+  // Poznámky ke dnům jen do interního exportu (pro odběratele nikdy).
+  const [exportNotes, setExportNotes] = useState(true);
   const [busy, setBusy] = useState(false);
   const [people, setPeople] = useState<Person[]>([]);
   const [workerFilter, setWorkerFilter] = useState<number | null>(null);
@@ -114,9 +117,9 @@ export default function OrderDetailScreen() {
       if (format === 'pdf') {
         const [settings, clients] = await Promise.all([getSettings(), listClients()]);
         const client = clients.find((c) => c.id === order.clientId) ?? null;
-        await sharePdfFromHtml(orderReportHtml(fresh, kind, settings, client, workerName ?? null), base, 'Odeslat přehled zakázky');
+        await sharePdfFromHtml(orderReportHtml(fresh, kind, settings, client, workerName ?? null, kind === 'internal' && exportNotes), base, 'Odeslat přehled zakázky');
       } else {
-        await shareBytes(orderReportXlsx(fresh, kind), `${base}.xlsx`, XLSX_MIME, 'Odeslat přehled zakázky');
+        await shareBytes(orderReportXlsx(fresh, kind, kind === 'internal' && exportNotes), `${base}.xlsx`, XLSX_MIME, 'Odeslat přehled zakázky');
       }
     } catch (err) {
       Alert.alert('Export se nepovedl', err instanceof Error ? err.message : String(err));
@@ -306,7 +309,15 @@ export default function OrderDetailScreen() {
             <View style={styles.tb}>
               {stats.days.slice(0, 31).map((x, i) => (
                 <TouchableOpacity key={x.date} style={[styles.row, i === 0 && styles.rowFirst]} onPress={() => router.push(`/day/${x.date}`)}>
-                  <Text style={styles.rowText}>{czDateYear(x.date)}</Text>
+                  <View style={styles.rn}>
+                    <Text style={styles.rowText}>{czDateYear(x.date)}</Text>
+                    {/* celý text poznámky je v detailu dne */}
+                    {!!x.note && (
+                      <Text style={styles.noteIcon} accessibilityLabel="Den má poznámku">
+                        ✎
+                      </Text>
+                    )}
+                  </View>
                   <Text style={styles.rv}>
                     {x.hours > 0 ? `${formatHodiny(x.hours)} · ` : ''}
                     {formatKc(x.amountKc)} ›
@@ -428,6 +439,14 @@ export default function OrderDetailScreen() {
       <BottomSheetModal visible={exportOpen} onClose={() => setExportOpen(false)}>
         <Text style={styles.modalTitle}>EXPORT ZAKÁZKY</Text>
         <Text style={styles.hint}>Pro odběratele: bez nákladů, s logem a tvými údaji. Interní: s náklady, výsledkem, lidmi a dny.</Text>
+        <View style={styles.exportToggle}>
+          <ToggleRow
+            label="Zahrnout poznámky ke dnům"
+            description="Jen interní export; pro odběratele se poznámky nikdy nevypíšou"
+            value={exportNotes}
+            onValueChange={setExportNotes}
+          />
+        </View>
         {(['client', 'internal'] as OrderReportKind[]).map((kind) => (
           <View key={kind} style={styles.exportRow}>
             <Text style={styles.exportLabel}>{kind === 'client' ? 'Pro odběratele' : 'Interní'}</Text>
@@ -503,6 +522,8 @@ const styles = StyleSheet.create({
   chipOn: { backgroundColor: colors.accent, borderColor: colors.accent },
   chipText: { color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(14) },
   chipTextOn: { color: colors.onAccent },
+  exportToggle: { marginTop: 12, marginBottom: -8 },
+  noteIcon: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(13) },
   exportRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
   exportLabel: { flex: 1, color: colors.text, fontFamily: fonts.bodySemiBold, fontSize: fs(15) },
   exportBtn: { minWidth: 72, minHeight: MIN_TOUCH, borderRadius: radii.card, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },

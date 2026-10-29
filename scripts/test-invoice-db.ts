@@ -46,6 +46,24 @@ async function main() {
   for (const [d, h] of [['2026-10-21', 5], ['2026-10-22', 1], ['2026-10-23', 8], ['2026-10-26', 6.5]] as const) await addWork(d, h);
 
   const tests: Array<[string, () => Promise<void>]> = [
+    ['poznámky ke dnům: zakázka i snímek faktury, na PDF jen s přepínačem', async () => {
+      await db.setDayNote('2026-10-22', 'Pršelo, jen hodina');
+      const rec = await sql.getFirstAsync<{ id: number }>("SELECT id FROM day_work_records WHERE date = '2026-10-23'");
+      await sql.runAsync('UPDATE day_work_records SET note = ? WHERE id = ?', ['Jen pro Veselou: výkop u plotu', rec!.id]);
+      const days = (await orders.getOrderDetail(orderId))!.stats.days;
+      assert.equal(days.find((d) => d.date === '2026-10-22')!.note, 'Pršelo, jen hodina');
+      assert.equal(days.find((d) => d.date === '2026-10-23')!.note, 'Jen pro Veselou: výkop u plotu');
+      assert.equal(days.find((d) => d.date === '2026-10-21')!.note, '');
+      const draft = await invoices.newInvoice(orderId);
+      assert.deepEqual(draft.workNotes, [
+        { date: '2026-10-22', note: 'Pršelo, jen hodina' },
+        { date: '2026-10-23', note: 'Jen pro Veselou: výkop u plotu' },
+      ]);
+      assert.doesNotMatch(html(draft), /Pršelo|výkop/);
+      const withNotes = invoiceHtml(draft, { mode: 'print', withNotes: true });
+      assert.match(withNotes, /class="dnote"><td colspan="6">Pršelo, jen hodina/);
+      assert.match(withNotes, /výkop u plotu/);
+    }],
     ['koncept: uložení ani sdílení nic nemění, číslo nerezervuje, PDF s nápisem KONCEPT', async () => {
       const draft = await invoices.newInvoice(orderId);
       assert.equal(draft.numberManual, false);
@@ -135,6 +153,12 @@ async function main() {
       await orders.deleteInvoiceBatch(batch);
       assert.equal((await invoices.getInvoice(first.id!))!.status, 'cancelled');
       assert.equal(await invoices.suggestInvoiceNumber(`${Y}-12-01`), `${Y}005`);
+    }],
+    ['poznámky: snímek se uloží s konceptem', async () => {
+      const draft = await invoices.newInvoice(orderId);
+      const id = await invoices.saveInvoice(draft);
+      assert.deepEqual((await invoices.getInvoice(id))!.workNotes, draft.workNotes);
+      assert.ok((draft.workNotes ?? []).length > 0);
     }],
   ];
 

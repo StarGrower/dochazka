@@ -13,18 +13,23 @@
 // HTML je čistá funkce dat faktury (snímek v DB), takže PDF jde kdykoli
 // vygenerovat znovu stejné. Koncept má přes každou stranu šikmý světle šedý
 // nápis KONCEPT, zrušená faktura ZRUŠENO.
+//
+// Poznámky ke dnům (snímek workNotes) jdou ven jen s withNotes = true
+// (přepínač před sdílením, výchozí vypnuto) - řádek pod posledním řádkem
+// dne, menší šedá kurzíva.
 
 import { formatIban } from './bankAccount';
 import { czDate, czDateWithWeekday, daysLabel, formatDecimal, itemTotal, periodLabel, quantityTotalsLabel, summarizeWorkLog, workLogRate, type WorkLogGroup } from './invoiceCalc';
 import { formatKc, formatQuantity } from './format';
 import { buildSpayd, qrSvg } from './spayd';
-import type { Invoice, InvoiceItem, InvoiceParty, WorkLogRow } from './types';
+import type { Invoice, InvoiceItem, InvoiceParty, WorkLogNote, WorkLogRow } from './types';
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
 
 export interface InvoiceHtmlOptions {
   mode: 'print' | 'preview';
   fontsCss?: string; // @font-face s vloženými písmy Barlow (lib/invoiceFonts.ts)
+  withNotes?: boolean; // poznámky ke dnům ve výpisu prací (výchozí vypnuto)
 }
 
 const PAGE_W = 794;
@@ -38,6 +43,13 @@ const CONT_HEAD = 104; // záhlaví další strany (nadpis + pruh)
 const THEAD = 38;
 const ITEMS_TAIL = 350; // celkem k úhradě, DPH, příloha, platební údaje + QR
 const LOG_ROW = 41;
+const NOTE_LINE = 17; // řádek poznámky (12 px kurzíva), ~105 znaků na řádek
+const NOTE_PAD = 10;
+
+type LogEntry = { kind: 'row'; row: WorkLogRow } | { kind: 'note'; note: WorkLogNote };
+
+const noteHeight = (n: WorkLogNote) =>
+  NOTE_PAD + NOTE_LINE * n.note.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 105)), 0);
 const SAFETY = 16;
 
 // Kč na faktuře: celé koruny bez haléřů ("7 175 Kč"), jinak s haléři.
@@ -102,6 +114,10 @@ const LOGO = `<svg viewBox="0 0 420 100" width="230" height="55" role="img" aria
 
 const MARK = `<svg viewBox="0 0 100 100" width="48" height="48" aria-hidden="true"><g transform="rotate(-12 30 48)"><rect x="14" y="18" width="9" height="60" rx="4.5" fill="#F2B705"/><path d="M24 21a27 27 0 0 1 0 54z" fill="#F2B705"/></g><circle cx="65" cy="62" r="20" fill="#fff" stroke="#fff" stroke-width="10"/><circle cx="65" cy="62" r="18" fill="none" stroke="#F2B705" stroke-width="8"/><path d="M65 53v9h7" fill="none" stroke="#131311" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
+// beforeNote: pod řádkem je poznámka dne -> bez čáry mezi nimi.
+const logRow = (r: WorkLogRow, beforeNote: boolean) =>
+  `<tr${beforeNote ? ' class="hasnote"' : ''}><td class="nw">${czDateWithWeekday(r.date)}</td><td class="ell">${esc(r.work)}</td><td class="ell">${esc(r.worker)}</td><td class="r">${esc(formatQuantity(r.quantity, r.unit))}</td><td class="r">${rateText(r)}</td><td class="r">${kcInvoice(r.amountKc)}</td></tr>`;
+
 const rateText = (r: WorkLogRow) => {
   const rate = workLogRate(r);
   return r.unit === 'hour' ? kcInvoice(rate) : `${kcInvoice(rate)}/${r.unit === 'day' ? 'den' : 'km'}`;
@@ -130,7 +146,13 @@ export function invoiceHtml(inv: Invoice, opts: InvoiceHtmlOptions): string {
   const itemPages = paginate(items, itemHeight, INNER - FOOT - P1_HEAD - THEAD - SAFETY, INNER - FOOT - CONT_HEAD - THEAD - SAFETY, ITEMS_TAIL);
   const recapRows = Math.max(summary.byWork.length, summary.byWorker.length);
   const logTail = 44 + 28 + 22 + recapRows * 32 + 8 + (carryNote ? 40 : 0);
-  const logPages = showLog ? paginate(log, () => LOG_ROW, INNER - FOOT - CONT_HEAD - THEAD - SAFETY, INNER - FOOT - CONT_HEAD - THEAD - SAFETY, logTail) : [];
+  // Poznámka dne hned za jeho posledním řádkem (výpis je seřazený podle data).
+  const notes = new Map((opts.withNotes ? (inv.workNotes ?? []) : []).map((n) => [n.date, n]));
+  const entries: LogEntry[] = log.flatMap((row, i) => {
+    const note = notes.get(row.date);
+    return note && log[i + 1]?.date !== row.date ? [{ kind: 'row' as const, row }, { kind: 'note' as const, note }] : [{ kind: 'row' as const, row }];
+  });
+  const logPages = showLog ? paginate(entries, (e) => (e.kind === 'row' ? LOG_ROW : noteHeight(e.note)), INNER - FOOT - CONT_HEAD - THEAD - SAFETY, INNER - FOOT - CONT_HEAD - THEAD - SAFETY, logTail) : [];
   const pageCount = itemPages.length + logPages.length;
   const logFirstPage = itemPages.length + 1;
   const foot = (n: number, withNo: boolean) =>
@@ -205,9 +227,10 @@ export function invoiceHtml(inv: Invoice, opts: InvoiceHtmlOptions): string {
     logPages.forEach((chunk, idx) => {
       const last = idx === logPages.length - 1;
       const rows = chunk
-        .map(
-          (r) =>
-            `<tr><td class="nw">${czDateWithWeekday(r.date)}</td><td class="ell">${esc(r.work)}</td><td class="ell">${esc(r.worker)}</td><td class="r">${esc(formatQuantity(r.quantity, r.unit))}</td><td class="r">${rateText(r)}</td><td class="r">${kcInvoice(r.amountKc)}</td></tr>`
+        .map((e, i) =>
+          e.kind === 'note'
+            ? `<tr class="dnote"><td colspan="6">${esc(e.note.note).replace(/\n/g, '<br>')}</td></tr>`
+            : logRow(e.row, chunk[i + 1]?.kind === 'note')
         )
         .join('');
       const tfoot = last
@@ -288,6 +311,8 @@ tfoot td{font-weight:700;border-bottom:0;border-top:2px solid var(--ink)}
 .recap{margin-top:28px;display:grid;grid-template-columns:1fr 1fr;gap:24px}
 .recap table{table-layout:auto}
 .recap table td{padding:7px 6px}
+.log tr.hasnote td{border-bottom:0;padding-bottom:4px}
+.log tr.dnote td{font-size:12px;line-height:17px;font-style:italic;color:var(--muted);padding:0 6px 8px;white-space:normal}
 .recap .ell{max-width:150px}
 </style></head><body>
 ${pages.join('\n')}
@@ -295,6 +320,6 @@ ${preview ? '' : `<script>(function(){var w=document.documentElement.clientWidth
 </body></html>`;
 }
 
-export function invoicePageCount(inv: Invoice): number {
-  return (invoiceHtml(inv, { mode: 'print' }).match(/<section class="page">/g) ?? []).length;
+export function invoicePageCount(inv: Invoice, withNotes = false): number {
+  return (invoiceHtml(inv, { mode: 'print', withNotes }).match(/<section class="page">/g) ?? []).length;
 }

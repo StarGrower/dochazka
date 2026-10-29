@@ -18,7 +18,7 @@
 //   PDF jde kdykoli vygenerovat znovu stejné (viz lib/invoiceReport.ts).
 
 import { ibanFromSetting } from './bankAccount';
-import { getDb, getSettings } from './db';
+import { getDayNotesBetween, getDb, getSettings } from './db';
 import { toIsoDate } from './format';
 import {
   addDaysIso,
@@ -35,6 +35,7 @@ import {
   type WorkSource,
 } from './invoiceCalc';
 import { deleteInvoiceBatch, effectiveOrders, getOrder, getOrderDetail, kmRates, listClients, listPeople, pendingCarries } from './orders';
+import { dayNoteText } from './orderStats';
 import { tripKm } from './tripPlan';
 import type {
   AppSettings,
@@ -49,6 +50,7 @@ import type {
   InvoiceSupplier,
   Order,
   RemainderMode,
+  WorkLogNote,
   WorkLogRow,
 } from './types';
 
@@ -68,6 +70,7 @@ interface InvoiceRow {
   payment: InvoicePayment;
   with_work_log: number;
   work_log_json: string | null;
+  work_notes_json: string | null;
   total_kc: number;
   invoice_batch_id: number | null;
   issued_at: string | null;
@@ -117,7 +120,7 @@ async function itemsOf(invoiceId: number): Promise<InvoiceItem[]> {
 }
 
 const SELECT = `SELECT id, number, number_manual, order_id, order_name, client_id, client_json, supplier_json, status, issue_date, due_days, due_date,
-  payment, with_work_log, work_log_json, total_kc, invoice_batch_id, issued_at, paid_at, cancelled_at, remainder_mode, remainder_hours,
+  payment, with_work_log, work_log_json, work_notes_json, total_kc, invoice_batch_id, issued_at, paid_at, cancelled_at, remainder_mode, remainder_hours,
   remainder_rate_kc, remainder_work, carry_json FROM invoices`;
 
 function mapRow(r: InvoiceRow, items: InvoiceItem[]): Invoice {
@@ -142,6 +145,7 @@ function mapRow(r: InvoiceRow, items: InvoiceItem[]): Invoice {
     payment: r.payment,
     withWorkLog: r.with_work_log === 1,
     workLog: parseJson<WorkLogRow[] | null>(r.work_log_json, null),
+    workNotes: parseJson<WorkLogNote[]>(r.work_notes_json, []),
     items,
     totalKc: r.total_kc,
     invoiceBatchId: r.invoice_batch_id,
@@ -200,6 +204,7 @@ export interface OrderWork {
   recordIds: number[];
   tripIds: number[];
   workLog: WorkLogRow[];
+  workNotes: WorkLogNote[];
   prefill: InvoiceItem[];
 }
 
@@ -212,8 +217,8 @@ export async function orderWorkForInvoice(orderId: number): Promise<OrderWork | 
   const eff = await effectiveOrders();
   const people = new Map((await listPeople(true)).map((p) => [p.id, p.name]));
   const records = (
-    await db.getAllAsync<{ id: number; date: string; name: string; quantity: number; unit: 'hour' | 'day' | 'km'; rate_kc: number; surcharge_pct: number; worker_id: number }>(
-      `SELECT r.id, r.date, c.name, r.quantity, r.unit, r.rate_kc, r.surcharge_pct, r.worker_id
+    await db.getAllAsync<{ id: number; date: string; name: string; quantity: number; unit: 'hour' | 'day' | 'km'; rate_kc: number; surcharge_pct: number; worker_id: number; note: string }>(
+      `SELECT r.id, r.date, c.name, r.quantity, r.unit, r.rate_kc, r.surcharge_pct, r.worker_id, r.note
        FROM day_work_records r JOIN work_categories c ON c.id = r.category_id WHERE r.invoice_batch_id IS NULL ORDER BY r.date, r.id`
     )
   ).filter((r) => eff.records.get(r.id) === orderId);
@@ -242,13 +247,21 @@ export async function orderWorkForInvoice(orderId: number): Promise<OrderWork | 
   ];
   const workLog = buildWorkLog(sources);
   const summary = summarizeWorkLog(workLog);
+  // Poznámky dnů výpisu (stejně jako interní výkaz zakázky).
+  const dayNotes = summary.from && summary.to ? await getDayNotesBetween(summary.from, summary.to) : new Map<string, string>();
+  const workNotes: WorkLogNote[] = [...new Set(workLog.map((r) => r.date))]
+    .map((date) => ({
+      date,
+      note: dayNoteText(dayNotes.get(date), [...new Set(records.filter((r) => r.date === date).map((r) => r.note.trim()).filter(Boolean))]),
+    }))
+    .filter((n) => n.note);
   const description = [`Zakázka ${order.name}`, periodLabel(summary.from, summary.to)].filter(Boolean).join(' · ');
   let fixed: { name: string; amountKc: number } | null = null;
   if (order.priceMode === 'fixed' && order.fixedPriceKc !== null) {
     const detail = await getOrderDetail(orderId, null, eff);
     fixed = { name: order.name, amountKc: detail?.stats.unbilledKc ?? 0 };
   }
-  return { order, sources, recordIds: records.map((r) => r.id), tripIds: trips.map((t) => t.id), workLog, prefill: itemsFromWork(sources, description, fixed) };
+  return { order, sources, recordIds: records.map((r) => r.id), tripIds: trips.map((t) => t.id), workLog, workNotes, prefill: itemsFromWork(sources, description, fixed) };
 }
 
 // --- nový koncept ---
@@ -278,6 +291,7 @@ export async function newInvoice(orderId: number | null): Promise<Invoice> {
     payment: 'transfer',
     withWorkLog: work !== null,
     workLog: work ? work.workLog : null,
+    workNotes: work ? work.workNotes : [],
     items,
     totalKc: invoiceTotal(items),
     invoiceBatchId: null,
@@ -303,6 +317,7 @@ export async function refreshDraft(inv: Invoice): Promise<Invoice> {
     supplier,
     number,
     workLog: work ? work.workLog : inv.workLog,
+    workNotes: work ? work.workNotes : inv.workNotes,
     orderName: work?.order.name ?? inv.orderName,
     carries: await pendingCarries(inv.orderId),
   };
@@ -318,14 +333,14 @@ export async function saveInvoice(inv: Invoice): Promise<number> {
   const params = [
     inv.number, inv.numberManual ? 1 : 0, inv.orderId, inv.orderName, inv.clientId, JSON.stringify(inv.client), JSON.stringify(inv.supplier), inv.issueDate,
     inv.dueDays, addDaysIso(inv.issueDate, inv.dueDays), inv.payment, inv.withWorkLog ? 1 : 0, inv.workLog ? JSON.stringify(inv.workLog) : null, total,
-    JSON.stringify(inv.carries),
+    JSON.stringify(inv.carries), JSON.stringify(inv.workNotes ?? []),
   ];
   let id = inv.id;
   await db.withExclusiveTransactionAsync(async (txn) => {
     if (id) {
       await txn.runAsync(
         `UPDATE invoices SET number = ?, number_manual = ?, order_id = ?, order_name = ?, client_id = ?, client_json = ?, supplier_json = ?, issue_date = ?,
-           due_days = ?, due_date = ?, payment = ?, with_work_log = ?, work_log_json = ?, total_kc = ?, carry_json = ?, updated_at = ?
+           due_days = ?, due_date = ?, payment = ?, with_work_log = ?, work_log_json = ?, total_kc = ?, carry_json = ?, work_notes_json = ?, updated_at = ?
          WHERE id = ? AND status = 'draft'`,
         [...params, new Date().toISOString(), id]
       );
@@ -333,7 +348,7 @@ export async function saveInvoice(inv: Invoice): Promise<number> {
     } else {
       const r = await txn.runAsync(
         `INSERT INTO invoices (number, number_manual, order_id, order_name, client_id, client_json, supplier_json, issue_date, due_days, due_date, payment,
-           with_work_log, work_log_json, total_kc, carry_json, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
+           with_work_log, work_log_json, total_kc, carry_json, work_notes_json, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
         params
       );
       id = r.lastInsertRowId;
@@ -371,7 +386,7 @@ export async function issueInvoice(inv: Invoice, remainderMode: RemainderMode | 
   if (await invoiceNumberTaken(ready.number, ready.id)) throw new Error(`Faktura č. ${ready.number} už byla vystavená (čísla se znovu nepoužívají).`);
   if (remainder && !remainderMode) throw new Error('Chybí volba, co se zbytkem hodin.');
   const work = ready.orderId !== null ? await orderWorkForInvoice(ready.orderId) : null;
-  const id = await saveInvoice({ ...ready, workLog: work ? work.workLog : ready.workLog });
+  const id = await saveInvoice({ ...ready, workLog: work ? work.workLog : ready.workLog, workNotes: work ? work.workNotes : ready.workNotes });
   const total = invoiceTotal(ready.items);
   const now = new Date().toISOString();
   const db = await getDb();

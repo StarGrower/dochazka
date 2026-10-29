@@ -50,6 +50,7 @@ export interface DayWorkRecord {
   workerId: number;
   timeFrom: string | null;
   timeTo: string | null;
+  note: string; // migrace v11: poznámka jen pro zakázku záznamu ('' = žádná)
 }
 
 export interface DayWorkRecordWithCategory extends DayWorkRecord {
@@ -271,6 +272,11 @@ export interface WorkLogRow {
   amountKc: number;
 }
 
+export interface WorkLogNote {
+  date: string; // YYYY-MM-DD
+  note: string;
+}
+
 export interface Invoice {
   id: number | null; // null = ještě neuložená
   number: string; // číslo faktury = variabilní symbol
@@ -287,6 +293,9 @@ export interface Invoice {
   payment: InvoicePayment;
   withWorkLog: boolean;
   workLog: WorkLogRow[] | null; // skutečná práce zakázky (null = bez zakázky)
+  // Migrace v11: poznámky ke dnům výpisu (poznámka ke dni + poznámky
+  // záznamů zakázky). Ve snímku vždy, na PDF jen se zapnutým přepínačem.
+  workNotes?: WorkLogNote[];
   items: InvoiceItem[];
   totalKc: number;
   invoiceBatchId: number | null;

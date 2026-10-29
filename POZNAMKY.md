@@ -1468,3 +1468,23 @@ pak navážu etapou 2 (uložená místa).
   k fakturaci. Zrušení podkladu v detailu zakázky = zrušení faktury.
 - Testy: `npm run test:invoice` (čisté výpočty a PDF), `npm run
   test:invoice-db` (faktury nad skutečnou SQLite přes node:sqlite).
+
+## Poznámky ke dnům (migrace v11)
+
+- Poznámka ke dni už existovala (`day_notes`, pole pod seznamem práce v
+  detailu dne, uložení při opuštění pole). Nově se zapisuje JEN změna -
+  otevření ani odchod ze dne bez úpravy nic nezapíše. Popisek „Poznámka ke dni“.
+- Nově poznámka k záznamu práce (`day_work_records.note`, aditivní, záloha
+  `dochazka-zaloha-pred-poznamkami.db` + šifrovaná záloha před migrací).
+  Pole „Poznámka k zakázce“ v panelu položky se ukáže, když je den
+  rozdělený na víc zakázek (nebo když už položka poznámku má); uloží se
+  tlačítkem ULOŽIT spolu s ostatními údaji položky.
+- Poznámka dne do výkazu zakázky = poznámka ke dni + poznámky záznamů té
+  zakázky (`dayNoteText` v `lib/orderStats.ts`).
+- Kam jde ven (přepínač „Zahrnout poznámky ke dnům“ před sdílením):
+  - interní export zakázky (PDF pod řádkem dne šedou kurzívou, Excel
+    sloupec „Poznámka“) - výchozí ZAPNUTO; export pro odběratele nikdy
+  - faktura (výpis prací) - výchozí VYPNUTO; snímek poznámek je ve
+    faktuře (`invoices.work_notes_json`), přepínač platí jen pro sdílení
+  - výkaz pro šéfa - výchozí VYPNUTO (dřív šla poznámka s „Podrobně“)
+- Detail zakázky › Po dnech: ✎ u dne s poznámkou, celý text v detailu dne.

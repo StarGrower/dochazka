@@ -6,7 +6,9 @@
 // - UPRAVIT: množství + jednotka + Smazat.
 // Doplněk etapy 5: každá položka má MÍSTO (výchozí podle mého pobytu, nebo
 // libovolné uložené / nové místo bez přítomnosti), PRACOVNÍKA (já / kolega),
-// zakázku a volitelně čas od-do.
+// zakázku a volitelně čas od-do. Ve dni rozděleném na víc zakázek navíc
+// poznámku jen pro zakázku položky (migrace v11; poznámka ke dni je pod
+// seznamem v detailu dne).
 // Sazba se ukládá k položce v okamžiku zápisu (viz lib/workCalc.ts ->
 // priceForRecord) - tenhle panel jen sbírá údaje a ukazuje výpočet.
 
@@ -34,6 +36,7 @@ export interface ItemAssignment {
   orderId: number | null; // null = automaticky podle místa, -1 = bez zakázky
   timeFrom: string | null; // HH:MM
   timeTo: string | null;
+  note: string; // poznámka jen pro zakázku položky
 }
 
 interface WorkItemSheetProps {
@@ -55,6 +58,7 @@ interface WorkItemSheetProps {
   onPlaceCreated: (place: Place) => void;
   onPeopleChanged: () => void;
   autoOrderName: (placeId: number | null, workerId: number) => string | null; // kam by položka spadla automaticky
+  orderNoteEnabled?: boolean; // den rozdělený na víc zakázek -> pole poznámky k zakázce
 }
 
 const UNITS: RateUnit[] = ['hour', 'day', 'km'];
@@ -85,6 +89,7 @@ export default function WorkItemSheet({
   onPlaceCreated,
   onPeopleChanged,
   autoOrderName,
+  orderNoteEnabled = false,
 }: WorkItemSheetProps) {
   const [orderId, setOrderId] = useState<number | null>(null);
   const [category, setCategory] = useState<WorkCategory | null>(null);
@@ -94,6 +99,7 @@ export default function WorkItemSheet({
   const [workerId, setWorkerId] = useState<number>(ME_ID);
   const [timeFrom, setTimeFrom] = useState('');
   const [timeTo, setTimeTo] = useState('');
+  const [note, setNote] = useState('');
   const [pickingPlace, setPickingPlace] = useState(false);
 
   // Při každém otevření začít od začátku (úprava = rovnou číselník).
@@ -110,6 +116,7 @@ export default function WorkItemSheet({
       setWorkerId(mode.record.workerId);
       setTimeFrom(mode.record.timeFrom ?? '');
       setTimeTo(mode.record.timeTo ?? '');
+      setNote(mode.record.note);
     } else if (mode?.kind === 'add') {
       setCategory(null);
       setOrderId(null);
@@ -118,6 +125,7 @@ export default function WorkItemSheet({
       setWorkerId(ME_ID);
       setTimeFrom('');
       setTimeTo('');
+      setNote('');
     }
   }, [mode, categoryById, dayPlaceIds]);
 
@@ -153,6 +161,7 @@ export default function WorkItemSheet({
     orderId,
     timeFrom: parseHHMM(timeFrom) !== null ? timeFrom.trim() : null,
     timeTo: parseHHMM(timeTo) !== null ? timeTo.trim() : null,
+    note: note.trim(),
   });
 
   const addWorker = () =>
@@ -221,6 +230,21 @@ export default function WorkItemSheet({
           inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
         />
       </View>
+
+      {(orderNoteEnabled || !!note) && (
+        <>
+          <Text style={styles.label}>POZNÁMKA K ZAKÁZCE</Text>
+          <TextInput
+            style={styles.noteInput}
+            value={note}
+            onChangeText={setNote}
+            multiline
+            placeholder="Jen pro zakázku této položky"
+            placeholderTextColor={colors.textMuted}
+            inputAccessoryViewID={KEYBOARD_ACCESSORY_ID}
+          />
+        </>
+      )}
     </>
   );
 
@@ -454,6 +478,18 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontFamily: fonts.body,
     fontSize: fs(16),
+  },
+  noteInput: {
+    minHeight: 64,
+    borderRadius: radii.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: colors.text,
+    fontFamily: fonts.body,
+    fontSize: fs(15),
+    textAlignVertical: 'top',
   },
   timeDash: { color: colors.textMuted, fontSize: fs(16) },
   buttons: { flexDirection: 'row', gap: 12, marginTop: 20 },

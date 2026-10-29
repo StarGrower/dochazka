@@ -11,7 +11,7 @@
 // Podklad k faktuře označí všechno nevyfakturované (invoice_batch_id) -
 // nic se nedá vyúčtovat dvakrát. Servis se do nákladů nepočítá.
 
-import { getDb, getVisitsForDay, listCategories, listPlaces } from './db';
+import { getDayNotesBetween, getDb, getVisitsForDay, listCategories, listPlaces } from './db';
 import { toIsoDate } from './format';
 import { computeOrderStats, type OrderStats } from './orderStats';
 import { tripKm } from './tripPlan';
@@ -495,9 +495,9 @@ export async function getOrderDetail(orderId: number, workerId: number | null = 
   const eff = effIn ?? (await effectiveOrders());
   const records = (await db.getAllAsync<{
     category_id: number; category_name: string; color: string; unit: 'hour' | 'day' | 'km'; quantity: number; rate_kc: number;
-    id: number; surcharge_pct: number; date: string; worker_id: number; invoice_batch_id: number | null;
+    id: number; surcharge_pct: number; date: string; worker_id: number; invoice_batch_id: number | null; note: string;
   }>(
-    `SELECT r.id, r.category_id, c.name as category_name, c.color, r.unit, r.quantity, r.rate_kc, r.surcharge_pct, r.date, r.worker_id, r.invoice_batch_id
+    `SELECT r.id, r.category_id, c.name as category_name, c.color, r.unit, r.quantity, r.rate_kc, r.surcharge_pct, r.date, r.worker_id, r.invoice_batch_id, r.note
      FROM day_work_records r JOIN work_categories c ON c.id = r.category_id ${workerId !== null ? 'WHERE r.worker_id = ?' : ''} ORDER BY r.date`,
     workerId !== null ? [workerId] : []
   )).filter((r) => eff.records.get(r.id) === orderId);
@@ -512,7 +512,14 @@ export async function getOrderDetail(orderId: number, workerId: number | null = 
     workerId !== null ? [workerId] : []
   )).filter((t) => eff.trips.get(t.id) === orderId);
   const rates = await kmRates();
-  const [allExpenses, batches, people, fuel] = await Promise.all([listExpenses(orderId), listInvoiceBatches(orderId), listPeople(true), orderFuelCost(orderId, eff)]);
+  const dates = [...records.map((r) => r.date), ...trips.map((t) => toIsoDate(new Date(t.start_at)))].sort();
+  const [allExpenses, batches, people, fuel, dayNotes] = await Promise.all([
+    listExpenses(orderId),
+    listInvoiceBatches(orderId),
+    listPeople(true),
+    orderFuelCost(orderId, eff),
+    dates.length > 0 ? getDayNotesBetween(dates[0], dates[dates.length - 1]) : Promise.resolve(new Map<string, string>()),
+  ]);
   const expenses = workerId === null ? allExpenses : [];
   const stats = computeOrderStats({
     priceMode: order.priceMode,
@@ -520,7 +527,7 @@ export async function getOrderDetail(orderId: number, workerId: number | null = 
     budgetKc: order.budgetKc,
     records: records.map((r) => ({
       categoryId: r.category_id, categoryName: r.category_name, color: r.color, unit: r.unit, quantity: r.quantity, rateKc: r.rate_kc,
-      surchargePct: r.surcharge_pct, date: r.date, workerId: r.worker_id, invoiceBatchId: r.invoice_batch_id,
+      surchargePct: r.surcharge_pct, date: r.date, workerId: r.worker_id, invoiceBatchId: r.invoice_batch_id, note: r.note,
     })),
     trips: trips.map((t) => ({
       km: tripKm({ kmOverride: t.km_override, distanceM: t.distance_m, roadDistanceM: t.road_distance_m }),
@@ -528,6 +535,7 @@ export async function getOrderDetail(orderId: number, workerId: number | null = 
       date: toIsoDate(new Date(t.start_at)),
       invoiceBatchId: t.invoice_batch_id,
     })),
+    dayNotes,
     expenses: expenses.map((e) => ({ amountKc: e.amountKc, category: e.category, date: e.date })),
     fuelCostKc: fuel.kc,
     fuelLiters: fuel.liters,
@@ -538,7 +546,6 @@ export async function getOrderDetail(orderId: number, workerId: number | null = 
   if (workerId === null) {
     for (const c of await pendingCarries(orderId)) stats.unbilledKc += Math.round(c.hours * c.rateKc * 100) / 100;
   }
-  const dates = [...records.map((r) => r.date), ...trips.map((t) => toIsoDate(new Date(t.start_at)))].sort();
   return { order, stats, expenses, batches, firstDate: dates[0] ?? null, lastDate: dates[dates.length - 1] ?? null };
 }
 

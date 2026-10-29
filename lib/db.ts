@@ -220,7 +220,7 @@ async function migrateAddCategoryKind(db: SQLite.SQLiteDatabase): Promise<void> 
 // telefonu se nesmí ztratit". Migrace samy nic fyzicky nemažou (jen
 // is_deleted / přesun do *_removed tabulek).
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 // Záloha se dělá před první čekající migrací; jméno podle verze, ze které
 // se migruje (existující záloha se nikdy nepřepisuje).
 function backupFileName(fromVersion: number): string {
@@ -228,6 +228,7 @@ function backupFileName(fromVersion: number): string {
   if (fromVersion === 4) return 'dochazka-zaloha-pred-etapami-5-7.db';
   if (fromVersion === 8) return 'dochazka-zaloha-pred-fakturaci.db';
   if (fromVersion === 9) return 'dochazka-zaloha-pred-upravou-fakturace.db';
+  if (fromVersion === 10) return 'dochazka-zaloha-pred-poznamkami.db';
   // v2 -> "před etapou 3", v3 -> "před etapou 4" (verze DB = číslo etapy)
   return `dochazka-zaloha-pred-etapou-${fromVersion + 1}.db`;
 }
@@ -290,6 +291,10 @@ async function runVersionedMigrations(db: SQLite.SQLiteDatabase, hadExistingDb: 
   if (version < 10) {
     await migrateV10InvoiceStates(db);
     await db.execAsync('PRAGMA user_version = 10');
+  }
+  if (version < 11) {
+    await migrateV11Notes(db);
+    await db.execAsync('PRAGMA user_version = 11');
   }
 }
 
@@ -987,6 +992,16 @@ async function migrateV10InvoiceStates(db: SQLite.SQLiteDatabase): Promise<void>
   `);
 }
 
+// Migrace v11 - poznámky (aditivní sloupce):
+// - day_work_records.note: poznámka k záznamu práce jen pro jeho zakázku
+//   (den rozdělený na víc zakázek); poznámka ke dni je dál v day_notes
+// - invoices.work_notes_json: snímek poznámek ke dnům výpisu prací
+//   (vystavená faktura se nemění); na PDF jen se zapnutým přepínačem
+async function migrateV11Notes(db: SQLite.SQLiteDatabase): Promise<void> {
+  await addColumnIfMissing(db, 'day_work_records', 'note', "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing(db, 'invoices', 'work_notes_json', 'TEXT');
+}
+
 async function migrateV8Duplicates(db: SQLite.SQLiteDatabase): Promise<void> {
   const now = new Date().toISOString();
   const log = (detail: string) =>
@@ -1260,6 +1275,7 @@ interface DayWorkRecordRow {
   order_manual: number | null;
   time_from: string | null;
   time_to: string | null;
+  note: string | null;
   category_name: string;
   is_deleted: number;
   color: string;
@@ -1282,6 +1298,7 @@ function mapDayWorkRecord(row: DayWorkRecordRow): DayWorkRecordWithCategory {
     workerId: row.worker_id ?? 1,
     timeFrom: row.time_from ?? null,
     timeTo: row.time_to ?? null,
+    note: row.note ?? '',
     categoryName: row.category_name,
     categoryDeleted: row.is_deleted === 1,
     color: row.color,
@@ -1292,7 +1309,7 @@ export async function getDayRecords(date: string): Promise<DayWorkRecordWithCate
   const db = await getDb();
   const rows = await db.getAllAsync<DayWorkRecordRow>(
     `SELECT r.id, r.date, r.category_id, r.quantity, r.unit, r.rate_kc, r.surcharge_pct, r.source, r.place_id, r.order_id, r.invoice_batch_id,
-            r.worker_id, r.order_manual, r.time_from, r.time_to, c.name as category_name, c.is_deleted, c.color
+            r.worker_id, r.order_manual, r.time_from, r.time_to, r.note, c.name as category_name, c.is_deleted, c.color
      FROM day_work_records r
      JOIN work_categories c ON c.id = r.category_id
      WHERE r.date = ?
@@ -1318,20 +1335,21 @@ export async function addDayRecord(record: {
   workerId?: number; // výchozí já
   timeFrom?: string | null;
   timeTo?: string | null;
+  note?: string; // poznámka jen pro zakázku záznamu (migrace v11)
 }): Promise<number> {
   const db = await getDb();
   const result = await db.runAsync(
-    `INSERT INTO day_work_records (date, category_id, quantity, unit, rate_kc, surcharge_pct, source, trip_id, place_id, order_id, order_manual, worker_id, time_from, time_to)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO day_work_records (date, category_id, quantity, unit, rate_kc, surcharge_pct, source, trip_id, place_id, order_id, order_manual, worker_id, time_from, time_to, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [record.date, record.categoryId, record.quantity, record.unit, record.rateKc, record.surchargePct, record.source, record.tripId ?? null, record.placeId ?? null,
-      record.orderId ?? null, record.orderId != null ? 1 : 0, record.workerId ?? 1, record.timeFrom ?? null, record.timeTo ?? null]
+      record.orderId ?? null, record.orderId != null ? 1 : 0, record.workerId ?? 1, record.timeFrom ?? null, record.timeTo ?? null, record.note ?? '']
   );
   return result.lastInsertRowId;
 }
 
 export async function updateDayRecord(
   id: number,
-  fields: { quantity: number; unit: RateUnit; rateKc: number; surchargePct?: number; placeId?: number | null; workerId?: number; timeFrom?: string | null; timeTo?: string | null }
+  fields: { quantity: number; unit: RateUnit; rateKc: number; surchargePct?: number; placeId?: number | null; workerId?: number; timeFrom?: string | null; timeTo?: string | null; note?: string }
 ): Promise<void> {
   const db = await getDb();
   const sets = ['quantity = ?', 'unit = ?', 'rate_kc = ?'];
@@ -1356,6 +1374,10 @@ export async function updateDayRecord(
     sets.push('time_to = ?');
     args.push(fields.timeTo);
   }
+  if (fields.note !== undefined) {
+    sets.push('note = ?');
+    args.push(fields.note);
+  }
   await db.runAsync(`UPDATE day_work_records SET ${sets.join(', ')} WHERE id = ?`, [...args, id]);
 }
 
@@ -1373,6 +1395,13 @@ export async function getDayNote(date: string): Promise<string> {
     [date]
   );
   return row?.note ?? '';
+}
+
+// Poznámky ke dnům za období (výkazy) - jen neprázdné.
+export async function getDayNotesBetween(from: string, to: string): Promise<Map<string, string>> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ date: string; note: string }>("SELECT date, note FROM day_notes WHERE date BETWEEN ? AND ? AND trim(note) <> ''", [from, to]);
+  return new Map(rows.map((r) => [r.date, r.note.trim()]));
 }
 
 export async function setDayNote(date: string, note: string): Promise<void> {

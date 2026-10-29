@@ -69,6 +69,8 @@ export default function VykazScreen() {
   const [withPrices, setWithPrices] = useState(true);
   const [withMap, setWithMap] = useState(false);
   const [detailed, setDetailed] = useState(false);
+  // Výkaz jde ven (šéfovi) - poznámky ke dnům jen na výslovné zapnutí.
+  const [withNotes, setWithNotes] = useState(false);
   const [signing, setSigning] = useState(false);
   const [signature, setSignature] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -116,6 +118,7 @@ export default function VykazScreen() {
         withPrices,
         withMap: withMap && format === 'pdf',
         detailed,
+        withNotes,
         signatureSvgPath: signing ? signature : null,
       };
       const data = await collectReport(options);
@@ -212,6 +215,7 @@ export default function VykazScreen() {
         <ToggleRow label="S cenami" description="Sazby, příplatky a částky" value={withPrices} onValueChange={setWithPrices} />
         <ToggleRow label="S mapou tras" description="Jen PDF; jinak jen souhrn km" value={withMap} onValueChange={setWithMap} />
         <ToggleRow label="Podrobně" description="Pobyty s časy a přejezdy; jinak souhrn po dnech" value={detailed} onValueChange={setDetailed} />
+        <ToggleRow label="Zahrnout poznámky ke dnům" description="Výchozí vypnuto - výkaz jde ven" value={withNotes} onValueChange={setWithNotes} />
         <ToggleRow label="Podpis na konci" description="Podepíšeš se prstem" value={signing} onValueChange={setSigning} />
         {signing && <SignaturePad onChange={setSignature} />}
         <Text style={styles.hint}>Soukromá místa a soukromé jízdy se ve výkazu nikdy nezobrazí.</Text>

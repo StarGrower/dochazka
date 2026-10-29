@@ -18,7 +18,7 @@
 // Nastavení -> Zápisy se tu používá: výchozí položky, délka dne, krok
 // číselníku a zaokrouhlení, příplatky, povinná poznámka.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -129,6 +129,9 @@ export default function DayDetailScreen() {
 
   const [records, setRecords] = useState<DayWorkRecordWithCategory[]>([]);
   const [note, setNote] = useState('');
+  // Naposledy uložená / načtená poznámka - zapisuje se jen změna (otevření
+  // ani odchod ze dne bez úpravy nic nezapíše).
+  const savedNote = useRef('');
   const [allCategories, setAllCategories] = useState<WorkCategory[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [sheetMode, setSheetMode] = useState<WorkItemSheetMode | null>(null);
@@ -173,6 +176,7 @@ export default function DayDetailScreen() {
     setSettings(s);
     setRecords(r);
     setNote(n);
+    savedNote.current = n;
     setAllCategories(c);
     setVisits(v);
     setNowMs(Date.now());
@@ -274,6 +278,7 @@ export default function DayDetailScreen() {
       workerId: a.workerId,
       timeFrom: a.timeFrom,
       timeTo: a.timeTo,
+      note: a.note,
     });
     setSheetMode(null);
     await load();
@@ -316,7 +321,7 @@ export default function DayDetailScreen() {
     } else if (category && !invoiced && unit !== record.unit) {
       rateKc = priceFor(category, unit, a.workerId).rateKc;
     }
-    await updateDayRecord(record.id, { quantity, unit, rateKc, surchargePct, placeId: a.placeId, workerId: a.workerId, timeFrom: a.timeFrom, timeTo: a.timeTo });
+    await updateDayRecord(record.id, { quantity, unit, rateKc, surchargePct, placeId: a.placeId, workerId: a.workerId, timeFrom: a.timeFrom, timeTo: a.timeTo, note: a.note });
     if (!invoiced) {
       // volba v panelu: null = automaticky, jinak ruční (migrace v7)
       const before = record.orderManual ? record.orderId : null;
@@ -603,8 +608,9 @@ export default function DayDetailScreen() {
   // --- poznámka ---
 
   const saveNote = async () => {
-    if (!date) return;
+    if (!date || note === savedNote.current) return;
     await setDayNote(date, note);
+    savedNote.current = note;
   };
 
   const noteMissing = !!settings?.dayNoteRequired && note.trim() === '';
@@ -675,6 +681,8 @@ export default function DayDetailScreen() {
     orderId !== null && orderId > 0 ? (allOrders.find((o) => o.id === orderId)?.name ?? null) : null;
   const recordOrderName = (r: DayWorkRecordWithCategory): string | null =>
     r.invoiceBatchId !== null || r.orderManual ? orderLabel(r.orderId) : autoOrderName(r.placeId, r.workerId);
+  // Den rozdělený na víc zakázek -> u záznamu jde i poznámka jen pro jeho zakázku.
+  const splitDay = new Set(records.map(recordOrderName).filter((n): n is string => !!n)).size > 1;
   const tripOrderName = (t: Trip): string | null => {
     if (t.invoiceBatchId !== null || t.orderManual) return orderLabel(t.orderId);
     if (t.isPrivate || !date) return null;
@@ -873,6 +881,11 @@ export default function DayDetailScreen() {
                 ) : allOrders.length > 0 ? (
                   <Text style={styles.noOrderTag}>bez zakázky</Text>
                 ) : null}
+                {!!item.note.trim() && (
+                  <Text style={styles.recordNote} numberOfLines={2}>
+                    {item.note.trim()}
+                  </Text>
+                )}
               </View>
               <Text style={styles.rowQuantity}>{formatKc(recordAmountKc(item))}</Text>
             </TouchableOpacity>
@@ -884,7 +897,7 @@ export default function DayDetailScreen() {
               <Text style={styles.addRowButtonText}>+ Přidat stroj nebo práci</Text>
             </TouchableOpacity>
 
-            <Text style={styles.fieldLabel}>Poznámka{settings.dayNoteRequired ? ' *' : ''}</Text>
+            <Text style={styles.fieldLabel}>Poznámka ke dni{settings.dayNoteRequired ? ' *' : ''}</Text>
             <TextInput
               style={[styles.noteInput, noteMissing && styles.noteInputRequired]}
               value={note}
@@ -923,6 +936,7 @@ export default function DayDetailScreen() {
         onPlaceCreated={(place) => setPlaces((list) => [...list, place])}
         onPeopleChanged={async () => setPeople(await listPeople())}
         autoOrderName={autoOrderName}
+        orderNoteEnabled={splitDay}
       />
 
       <StaySheet
@@ -1071,6 +1085,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   noOrderTag: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(11), fontStyle: 'italic', marginTop: 3 },
+  recordNote: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12), fontStyle: 'italic', marginTop: 3 },
   groupHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, marginBottom: 4, gap: 8 },
   groupTitle: { color: colors.textMuted, fontFamily: fonts.headingBold, fontSize: fs(13), letterSpacing: 0.8, flex: 1 },
   groupKc: { color: colors.textMuted, fontFamily: fonts.body, fontSize: fs(12) },
