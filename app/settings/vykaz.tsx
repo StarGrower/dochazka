@@ -6,18 +6,19 @@
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { File, Paths } from 'expo-file-system';
-import * as Print from 'expo-print';
 import { useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 
 import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
+import PdfPreview from '@/components/PdfPreview';
 import ScreenHeader from '@/components/ScreenHeader';
 import SignaturePad from '@/components/SignaturePad';
 import ToggleRow from '@/components/ToggleRow';
 import { getSettings, listPlaces } from '@/lib/db';
 import { toIsoDate } from '@/lib/format';
-import { collectReport, reportCsv, reportHtml, reportXlsx, type ReportOptions } from '@/lib/report';
+import { collectReport, reportCsv, reportHtml, reportXlsx, type ReportData, type ReportOptions } from '@/lib/report';
+import { sharePdfFromHtml } from '@/lib/shareFile';
 import { listPeople } from '@/lib/orders';
 import type { AppSettings, Person, Place } from '@/lib/types';
 import { colors, fonts, fs, MIN_TOUCH, radii } from '@/theme';
@@ -74,6 +75,9 @@ export default function VykazScreen() {
   const [signing, setSigning] = useState(false);
   const [signature, setSignature] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Náhled PDF - ceny a poznámky jdou změnit i v něm (PDF se přegeneruje).
+  const [preview, setPreview] = useState<{ data: ReportData; html: string } | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
 
   const load = useCallback(async () => {
     setSettings(await getSettings());
@@ -127,29 +131,44 @@ export default function VykazScreen() {
         return;
       }
       const baseName = `Vykaz-${r.from}-az-${r.to}`;
-      let uri: string;
-      let mimeType: string;
       if (format === 'pdf') {
-        const printed = await Print.printToFileAsync({ html: await reportHtml(data, settings) });
-        const target = new File(Paths.cache, `${baseName}.pdf`);
-        if (target.exists) target.delete();
-        await new File(printed.uri).move(target);
-        uri = target.uri;
-        mimeType = 'application/pdf';
-      } else {
-        const target = new File(Paths.cache, `${baseName}.${format}`);
-        if (target.exists) target.delete();
-        target.create();
-        if (format === 'csv') target.write(reportCsv(data));
-        else target.write(reportXlsx(data));
-        uri = target.uri;
-        mimeType = format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        // PDF nejdřív do náhledu, sdílení až z něj.
+        setPreview({ data, html: await reportHtml(data, settings) });
+        return;
       }
-      await Sharing.shareAsync(uri, { mimeType, dialogTitle: 'Odeslat výkaz' });
+      const target = new File(Paths.cache, `${baseName}.${format}`);
+      if (target.exists) target.delete();
+      target.create();
+      if (format === 'csv') target.write(reportCsv(data));
+      else target.write(reportXlsx(data));
+      const mimeType = format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      await Sharing.shareAsync(target.uri, { mimeType, dialogTitle: 'Odeslat výkaz' });
     } catch (err) {
       Alert.alert('Výkaz se nepovedl', err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Volba v náhledu = i volba na obrazovce (platí pak i pro Excel).
+  const changePreview = async (change: Partial<ReportOptions>) => {
+    if (change.withPrices !== undefined) setWithPrices(change.withPrices);
+    if (change.withNotes !== undefined) setWithNotes(change.withNotes);
+    if (!preview || !settings) return;
+    setPreviewBusy(true);
+    try {
+      const data = { ...preview.data, options: { ...preview.data.options, ...change } };
+      setPreview({ data, html: await reportHtml(data, settings) });
+    } finally {
+      setPreviewBusy(false);
+    }
+  };
+
+  const sharePreview = async (p: { data: ReportData; html: string }) => {
+    try {
+      await sharePdfFromHtml(p.html, `Vykaz-${p.data.options.from}-az-${p.data.options.to}`, 'Odeslat výkaz');
+    } catch (err) {
+      Alert.alert('Výkaz se nepovedl', err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -238,6 +257,22 @@ export default function VykazScreen() {
           </>
         )}
       </ScrollView>
+
+      <PdfPreview
+        html={preview?.html ?? null}
+        title="VÝKAZ PRO ŠÉFA"
+        busy={previewBusy}
+        options={
+          preview
+            ? [
+                { label: 'S cenami', value: preview.data.options.withPrices, onChange: (v) => changePreview({ withPrices: v }) },
+                { label: 'Zahrnout poznámky ke dnům', value: !!preview.data.options.withNotes, onChange: (v) => changePreview({ withNotes: v }) },
+              ]
+            : []
+        }
+        actions={preview ? [{ label: 'SDÍLET', onPress: () => sharePreview(preview), primary: true }] : []}
+        onClose={() => setPreview(null)}
+      />
     </SafeScreen>
   );
 }

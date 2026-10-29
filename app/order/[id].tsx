@@ -12,6 +12,7 @@ import BottomSheetModal from '@/components/BottomSheetModal';
 import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import OrderBadge from '@/components/OrderBadge';
+import PdfPreview from '@/components/PdfPreview';
 import ToggleRow from '@/components/ToggleRow';
 import { getSettings } from '@/lib/db';
 import { formatHodiny, formatKc, formatNumberCs, toIsoDate } from '@/lib/format';
@@ -30,8 +31,10 @@ import {
 } from '@/lib/orders';
 import { BUDGET_WARN_PCT } from '@/lib/orderStats';
 import { safeFileName, shareBytes, sharePdfFromHtml, XLSX_MIME } from '@/lib/shareFile';
-import type { ExpenseCategory, Person } from '@/lib/types';
+import type { AppSettings, Client, ExpenseCategory, Person } from '@/lib/types';
 import { colors, fonts, fs, MIN_TOUCH, radii } from '@/theme';
+
+const SHEET_CLOSE_MS = 400; // animace zavření okna zespodu
 
 const czDate = (iso: string | null) => (iso ? `${Number(iso.slice(8, 10))}. ${Number(iso.slice(5, 7))}.` : '');
 const czDateYear = (iso: string) => `${Number(iso.slice(8, 10))}. ${Number(iso.slice(5, 7))}. ${iso.slice(0, 4)}`;
@@ -47,6 +50,9 @@ export default function OrderDetailScreen() {
   const [exportOpen, setExportOpen] = useState(false);
   // Poznámky ke dnům jen do interního exportu (pro odběratele nikdy).
   const [exportNotes, setExportNotes] = useState(true);
+  // Náhled PDF exportu (sdílení až z náhledu); HTML se přegeneruje po změně volby.
+  const [preview, setPreview] = useState<{ kind: OrderReportKind; detail: OrderDetail; client: Client | null; settings: AppSettings; html: string } | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [people, setPeople] = useState<Person[]>([]);
   const [workerFilter, setWorkerFilter] = useState<number | null>(null);
@@ -109,6 +115,8 @@ export default function OrderDetailScreen() {
   };
 
   const runExport = async (kind: OrderReportKind, format: 'pdf' | 'xlsx') => {
+    // iOS neotevře druhý modal, dokud se okno exportu nezavře.
+    const sheetClosed = new Promise((resolve) => setTimeout(resolve, SHEET_CLOSE_MS));
     setExportOpen(false);
     setBusy(true);
     try {
@@ -117,7 +125,9 @@ export default function OrderDetailScreen() {
       if (format === 'pdf') {
         const [settings, clients] = await Promise.all([getSettings(), listClients()]);
         const client = clients.find((c) => c.id === order.clientId) ?? null;
-        await sharePdfFromHtml(orderReportHtml(fresh, kind, settings, client, workerName ?? null, kind === 'internal' && exportNotes), base, 'Odeslat přehled zakázky');
+        const html = orderReportHtml(fresh, kind, settings, client, workerName ?? null, kind === 'internal' && exportNotes);
+        await sheetClosed;
+        setPreview({ kind, detail: fresh, client, settings, html });
       } else {
         await shareBytes(orderReportXlsx(fresh, kind, kind === 'internal' && exportNotes), `${base}.xlsx`, XLSX_MIME, 'Odeslat přehled zakázky');
       }
@@ -125,6 +135,29 @@ export default function OrderDetailScreen() {
       Alert.alert('Export se nepovedl', err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const previewHtml = (p: NonNullable<typeof preview>, notes: boolean) =>
+    orderReportHtml(p.detail, p.kind, p.settings, p.client, workerName ?? null, p.kind === 'internal' && notes);
+
+  const togglePreviewNotes = (next: boolean) => {
+    setExportNotes(next);
+    if (!preview) return;
+    setPreviewBusy(true);
+    try {
+      setPreview({ ...preview, html: previewHtml(preview, next) });
+    } finally {
+      setPreviewBusy(false);
+    }
+  };
+
+  const sharePreview = async (p: NonNullable<typeof preview>) => {
+    try {
+      const base = `Zakazka-${safeFileName(order.name)}-${p.kind === 'client' ? 'pro-odberatele' : 'interni'}`;
+      await sharePdfFromHtml(p.html, base, 'Odeslat přehled zakázky');
+    } catch (err) {
+      Alert.alert('Sdílení se nepovedlo', err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -442,7 +475,7 @@ export default function OrderDetailScreen() {
         <View style={styles.exportToggle}>
           <ToggleRow
             label="Zahrnout poznámky ke dnům"
-            description="Jen interní export; pro odběratele se poznámky nikdy nevypíšou"
+            description="Interní export (PDF jde změnit i v náhledu); pro odběratele se poznámky nevypíšou"
             value={exportNotes}
             onValueChange={setExportNotes}
           />
@@ -459,6 +492,14 @@ export default function OrderDetailScreen() {
           </View>
         ))}
       </BottomSheetModal>
+      <PdfPreview
+        html={preview?.html ?? null}
+        title={preview?.kind === 'client' ? 'PRO ODBĚRATELE' : 'INTERNÍ PŘEHLED'}
+        busy={previewBusy}
+        options={preview?.kind === 'internal' ? [{ label: 'Zahrnout poznámky ke dnům', value: exportNotes, onChange: togglePreviewNotes }] : []}
+        actions={preview ? [{ label: 'SDÍLET', onPress: () => sharePreview(preview), primary: true }] : []}
+        onClose={() => setPreview(null)}
+      />
     </SafeScreen>
   );
 }

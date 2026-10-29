@@ -1504,3 +1504,15 @@ pak navážu etapou 2 (uložená místa).
 - Náhled faktury: dole Zavřít | Sdílet koncept | VYSTAVIT (koncept),
   Zavřít | SDÍLET (vystavená). Akce se spustí až po zavření náhledu.
 - Mapa přes celou obrazovku: ZAVŘÍT MAPU dole, stažení dolů za úchyt.
+
+## Sdílení PDF přes náhled (`components/PdfPreview.tsx`)
+
+- Faktura, export zakázky (pro odběratele i interní) a výkaz pro šéfa:
+  sdílení PDF nejdřív otevře náhled, systémové Sdílet až tlačítkem v něm.
+  Excel / CSV se sdílí rovnou bez náhledu.
+- Volby v náhledu mění PDF hned (HTML se přegeneruje):
+  - faktura: „Zahrnout poznámky ke dnům“ (jen když výpis prací nějaké má),
+    při každém otevření vypnuto - bez zapnutí je faktura nikdy neobsahuje
+  - interní export zakázky: poznámky, výchozí zapnuto
+  - výkaz pro šéfa: „S cenami“ a „Zahrnout poznámky ke dnům“ (vypnuto)
+  - export pro odběratele: bez voleb (poznámky ani ceny bez cen neumí)

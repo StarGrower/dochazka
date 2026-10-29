@@ -15,7 +15,7 @@ import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, Touc
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
 import InvoiceItemsEditor, { itemToRow, rowToItem, type ItemRow } from '@/components/InvoiceItemsEditor';
-import InvoicePreview from '@/components/InvoicePreview';
+import PdfPreview from '@/components/PdfPreview';
 import SafeScreen from '@/components/SafeScreen';
 import { KEYBOARD_ACCESSORY_ID } from '@/components/KeyboardDoneAccessory';
 import ScreenHeader from '@/components/ScreenHeader';
@@ -54,9 +54,11 @@ export default function InvoiceEditScreen() {
   const [daysText, setDaysText] = useState('');
   const [takenNumbers, setTakenNumbers] = useState<Record<string, boolean>>({});
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
-  // Poznámky ke dnům ve výpisu prací - jen pro tohle sdílení, výchozí vypnuto
-  // (faktura jde ven, nic se nepřidá samo).
+  const [previewDoc, setPreviewDoc] = useState<Invoice | null>(null);
+  // Poznámky ke dnům ve výpisu prací - volba v náhledu, při každém otevření
+  // vypnuto (faktura jde ven, nic se nepřidá samo).
   const [withNotes, setWithNotes] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [rows, setRows] = useState<ItemRow[]>([]);
   const [newClient, setNewClient] = useState<InvoiceParty | null>(null);
@@ -193,29 +195,48 @@ export default function InvoiceEditScreen() {
     }
   };
 
-  const html = async (doc: Invoice, mode: 'print' | 'preview') => invoiceHtml(doc, { mode, fontsCss: await invoiceFontsCss(), withNotes });
+  const html = async (doc: Invoice, mode: 'print' | 'preview', notes: boolean) =>
+    invoiceHtml(doc, { mode, fontsCss: await invoiceFontsCss(), withNotes: notes });
 
-  const openPreview = async () => {
+  const draftDoc = () => {
+    const party = newClient && newClient.name.trim() ? newClient : inv.client;
+    return draft ? { ...current(), client: party } : inv;
+  };
+
+  // Sdílení vždy přes náhled: teprve „Sdílet“ v náhledu otevře systémové sdílení.
+  const showPreview = async (doc: Invoice) => {
     setBusy(true);
     try {
-      const party = newClient && newClient.name.trim() ? newClient : inv.client;
-      setPreviewHtml(await html({ ...current(), client: party }, 'preview'));
+      setWithNotes(false);
+      setPreviewDoc(doc);
+      setPreviewHtml(await html(doc, 'preview', false));
     } finally {
       setBusy(false);
     }
   };
+  const openPreview = () => showPreview(draftDoc());
 
-  const sharePdf = async (doc: Invoice) => {
-    await sharePdfFromHtml(await html(doc, 'print'), `Faktura-${doc.number}`, `Faktura č. ${doc.number}`, A4_NO_MARGINS);
+  const toggleNotes = async (next: boolean) => {
+    if (!previewDoc) return;
+    setWithNotes(next);
+    setPreviewBusy(true);
+    try {
+      setPreviewHtml(await html(previewDoc, 'preview', next));
+    } finally {
+      setPreviewBusy(false);
+    }
   };
 
-  // PDF konceptu (s nápisem KONCEPT) - nic se neukládá ani nemění.
-  const shareCurrent = async () => {
+  const closePreview = () => {
     setPreviewHtml(null);
+    setPreviewDoc(null);
+  };
+
+  // PDF z náhledu (koncept s nápisem KONCEPT) - nic se neukládá ani nemění.
+  const sharePreviewed = async (doc: Invoice, notes: boolean) => {
     setBusy(true);
     try {
-      const party = newClient && newClient.name.trim() ? newClient : inv.client;
-      await sharePdf(draft ? { ...current(), client: party } : inv);
+      await sharePdfFromHtml(await html(doc, 'print', notes), `Faktura-${doc.number}`, `Faktura č. ${doc.number}`, A4_NO_MARGINS);
     } catch (err) {
       Alert.alert('Sdílení se nepovedlo', err instanceof Error ? err.message : String(err));
     } finally {
@@ -226,7 +247,7 @@ export default function InvoiceEditScreen() {
   // Vystavení: (zbytek hodin?) -> potvrzení -> vystavit -> nabídnout sdílení.
   const issue = async () => {
     if (!validate(true)) return;
-    setPreviewHtml(null);
+    closePreview();
     const party = newClient && newClient.name.trim() ? newClient : inv.client;
     const { invoice: ready, remainder } = await prepareIssue({ ...current(), client: party });
     const amount = kcInvoice(invoiceTotal(ready.items));
@@ -239,11 +260,7 @@ export default function InvoiceEditScreen() {
         setInv(issued);
         Alert.alert(`Faktura č. ${issued.number} je vystavená`, 'Poslat PDF odběrateli?', [
           { text: 'Později', style: 'cancel' },
-          {
-            text: 'Sdílet PDF',
-            onPress: () =>
-              sharePdf(issued).catch((err) => Alert.alert('Sdílení se nepovedlo', err instanceof Error ? err.message : String(err))),
-          },
+          { text: 'Náhled a sdílet', onPress: () => showPreview(issued) },
         ]);
       } catch (err) {
         Alert.alert('Faktura se nevystavila', err instanceof Error ? err.message : String(err));
@@ -514,14 +531,6 @@ export default function InvoiceEditScreen() {
               disabled={!draft}
               onValueChange={(v) => update({ withWorkLog: v })}
             />
-            {inv.withWorkLog && (inv.workNotes?.length ?? 0) > 0 && (
-              <ToggleRow
-                label="Zahrnout poznámky ke dnům"
-                description="Do výpisu prací pod řádek dne. Výchozí vypnuto - faktura jde ven"
-                value={withNotes}
-                onValueChange={setWithNotes}
-              />
-            )}
           </>
         )}
 
@@ -531,7 +540,7 @@ export default function InvoiceEditScreen() {
           </TouchableOpacity>
           {draft && (
             <>
-              <TouchableOpacity style={styles.secondary} onPress={shareCurrent} disabled={busy}>
+              <TouchableOpacity style={styles.secondary} onPress={openPreview} disabled={busy}>
                 <Text style={styles.secondaryText}>SDÍLET KONCEPT (PDF)</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.secondary} onPress={saveDraft} disabled={busy}>
@@ -543,7 +552,7 @@ export default function InvoiceEditScreen() {
             </>
           )}
           {!draft && (
-            <TouchableOpacity style={styles.primary} onPress={shareCurrent} disabled={busy}>
+            <TouchableOpacity style={styles.primary} onPress={openPreview} disabled={busy}>
               {busy ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.primaryText}>SDÍLET (PDF)</Text>}
             </TouchableOpacity>
           )}
@@ -560,18 +569,26 @@ export default function InvoiceEditScreen() {
         </View>
       </ScrollView>
 
-      <InvoicePreview
+      <PdfPreview
         html={previewHtml}
-        title={draft ? 'KONCEPT FAKTURY' : `FAKTURA ${inv.number}`}
-        actions={
-          draft
-            ? [
-                { label: 'Sdílet koncept', onPress: shareCurrent },
-                { label: 'VYSTAVIT', onPress: issue, primary: true },
-              ]
-            : [{ label: 'SDÍLET', onPress: shareCurrent, primary: true }]
+        title={previewDoc?.status === 'draft' ? 'KONCEPT FAKTURY' : `FAKTURA ${previewDoc?.number ?? ''}`}
+        busy={previewBusy}
+        options={
+          previewDoc?.withWorkLog && (previewDoc.workNotes?.length ?? 0) > 0
+            ? [{ label: 'Zahrnout poznámky ke dnům', value: withNotes, onChange: toggleNotes }]
+            : []
         }
-        onClose={() => setPreviewHtml(null)}
+        actions={
+          !previewDoc
+            ? []
+            : previewDoc.status === 'draft'
+              ? [
+                  { label: 'Sdílet koncept', onPress: () => sharePreviewed(previewDoc, withNotes) },
+                  { label: 'VYSTAVIT', onPress: issue, primary: true },
+                ]
+              : [{ label: 'SDÍLET', onPress: () => sharePreviewed(previewDoc, withNotes), primary: true }]
+        }
+        onClose={closePreview}
       />
     </SafeScreen>
   );
